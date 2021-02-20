@@ -84,7 +84,7 @@ describe('Node.js LMDB Bindings', function() {
       var wtxn1 = env.beginTxn();
       (function() {
         var wtxn2 = env.beginTxn();
-      }).should.throw("You have already opened a write transaction in the current process, can't open a second one.");
+      }).should.throw("MDBX_BUSY: Another write transaction is running, or environment is already used while opening with MDBX_EXCLUSIVE flag");
       wtxn1.abort();
     });
     it('will open a database, begin a transaction and get/put/delete data', function() {

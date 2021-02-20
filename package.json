@@ -1,15 +1,16 @@
 {
-  "name": "lmdb-store",
+  "name": "lmdbx-store",
   "author": "Kris Zyp",
   "version": "1.1.6",
-  "description": "Simple, efficient, scalable data store wrapper for LMDB",
+  "description": "Simple, efficient, scalable data store wrapper for libmdbx",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "http://github.com/DoctorEvidence/lmdb-store"
+    "url": "http://github.com/DoctorEvidence/lmdbx-store"
   },
   "keywords": [
     "lmdb",
+    "libmdbx",
     "database",
     "mdb",
     "lightning"

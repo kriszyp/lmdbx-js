@@ -45,7 +45,7 @@ function open(path, options) {
 		noSubdir: Boolean(extension),
 		isRoot: true,
 		maxDbs: 12,
-		mapSize: 0x40000, // default map size of 256KB
+		mapSize: 0x1000000000,
 	}, options)
 	if (!fs.existsSync(options.noSubdir ? dirname(path) : path))
 		mkdirpSync(options.noSubdir ? dirname(path) : path)
@@ -74,7 +74,7 @@ function open(path, options) {
 	try {
 		env.open(options)
 	} catch(error) {
-		if (error.message.startsWith('MDB_INVALID')) {
+		if (error.message.startsWith('MDBX_INVALID')) {
 			require('./util/upgrade-lmdb').upgrade(path, options, open)
 			env = new Env()
 			env.open(options)
@@ -92,17 +92,13 @@ function open(path, options) {
 	function resetReadTxn() {
 		if (readTxnRenewed) {
 			readTxnRenewed = null
-			if (readTxn.cursorCount > 0) {
-				readTxn.onlyCursor = true
-				cursorTxns.push(readTxn)
-				readTxn = null
-			}
-			else
-				readTxn.reset()
+			readTxn.abort()
+			readTxn.isAborted = true
+			readTxn = null
 		}
 	}
 	let stores = []
-	class LMDBStore extends EventEmitter {
+	class LMDBXStore extends EventEmitter {
 		constructor(dbName, dbOptions) {
 			super()
 			if (dbName === undefined)
@@ -170,10 +166,10 @@ function open(path, options) {
 				dbOptions = dbOptions || {}
 			try {
 				return dbOptions.cache ?
-					new (CachingStore(LMDBStore))(dbName, dbOptions) :
-					new LMDBStore(dbName, dbOptions)
+					new (CachingStore(LMDBXStore))(dbName, dbOptions) :
+					new LMDBXStore(dbName, dbOptions)
 			} catch(error) {
-				if (error.message.indexOf('MDB_DBS_FULL') > -1) {
+				if (error.message.indexOf('MDBX_DBS_FULL') > -1) {
 					error.message += ' (increase your maxDbs option)'
 				}
 				throw error
@@ -189,6 +185,8 @@ function open(path, options) {
 			let txn
 			try {
 				this.transactions++
+				console.log('transaction', name)
+				resetReadTxn()
 				txn = writeTxn = env.beginTxn()
 				/*if (scheduledOperations && runNextBatch) {
 					runNextBatch((operations, callback) => {
@@ -202,12 +200,15 @@ function open(path, options) {
 				TODO: To reenable forced sequential writes, we need to re-execute the operations if we get an env resize
 				*/
 				return when(execute(), (result) => {
+					console.log('finished execution', name)
 					try {
+						resetReadTxn()
 						if (abort) {
 							txn.abort()
+				console.log('transaction aborted', name)
 						} else {
 							txn.commit()
-							resetReadTxn()
+				console.log('transaction committed', name)
 						}
 						writeTxn = null
 						return result
@@ -360,8 +361,12 @@ function open(path, options) {
 			let localTxn, hadWriteTxn = writeTxn
 			try {
 				this.writes++
-				if (!writeTxn)
+				console.log('putSync', name)
+				resetReadTxn()
+				if (!writeTxn) {
 					localTxn = writeTxn = env.beginTxn()
+				console.log('putSyncStarted', name)
+				}
 				if (this.encoder)
 					value = this.encoder.encode(value)
 				if (typeof value == 'string') {
@@ -373,9 +378,11 @@ function open(path, options) {
 					writeTxn.putBinary(this.db, id, value, version)
 				}
 				if (localTxn) {
+					console.log('putSync committing', name)
 					writeTxn.commit()
+					console.log('putSync committed', name)
+
 					writeTxn = null
-					resetReadTxn()
 				}
 			} catch(error) {
 				if (hadWriteTxn)
@@ -389,8 +396,12 @@ function open(path, options) {
 			}
 			let localTxn, hadWriteTxn = writeTxn
 			try {
-				if (!writeTxn)
+				if (!writeTxn) {
+				console.log('removeSync', name)
+					resetReadTxn()
 					localTxn = writeTxn = env.beginTxn()
+				console.log('removeSync started', name)
+				}
 				let deleteValue
 				if (ifVersionOrValue !== undefined) {
 					if (this.useVersions) {
@@ -407,7 +418,9 @@ function open(path, options) {
 				else
 					result = writeTxn.del(this.db, id)
 				if (localTxn) {
+					console.log('removeSync committing', name)
 					writeTxn.commit()
+					console.log('removeSync committed', name)
 					writeTxn = null
 					resetReadTxn()
 				}
@@ -644,6 +657,7 @@ function open(path, options) {
 								let start = Date.now()
 								let results = Buffer.alloc(operations.length)
 								let callback = (error) => {
+									console.log('batch finished', name, error)
 									let duration = Date.now() - start
 									this.averageTransactionTime = (this.averageTransactionTime * 3 + duration) / 4
 									//console.log('did batch', (duration) + 'ms', name, operations.length/*map(o => o[1].toString('binary')).join(',')*/)
@@ -668,6 +682,7 @@ function open(path, options) {
 									}
 								}
 								try {
+									console.log('batch start', name)
 									if (sync === true) {
 										env.batchWrite(operations, results)
 										callback()
@@ -808,6 +823,8 @@ function open(path, options) {
 						let existingStructures = existingStructuresBuffer ? this.encoder.decode(existingStructuresBuffer) : []
 						if (existingStructures.length != previousLength)
 							return false // it changed, we need to indicate that we couldn't update
+						resetReadTxn()
+						console.log('updating save structures')
 						writeTxn.putBinary(this.db, this.sharedStructuresKey, this.encoder.encode(structures))
 					})
 				},
@@ -817,8 +834,8 @@ function open(path, options) {
 		}
 	}
 	return options.cache ?
-		new (CachingStore(LMDBStore))(options.name || null, options) :
-		new LMDBStore(options.name || null, options)
+		new (CachingStore(LMDBXStore))(options.name || null, options) :
+		new LMDBXStore(options.name || null, options)
 	function handleError(error, store, txn, retry) {
 		try {
 			if (writeTxn)
@@ -839,7 +856,7 @@ function open(path, options) {
 			}
 			return retry()
 		}
-		if (error.message.startsWith('MDB_') && !(error.message.startsWith('MDB_KEYEXIST') || error.message.startsWith('MDB_NOTFOUND'))) {
+		if (error.message.startsWith('MDBX_') && !(error.message.startsWith('MDBX_KEYEXIST') || error.message.startsWith('MDBX_NOTFOUND'))) {
 			resetReadTxn() // separate out cursor-based read txns
 			try {
 				if (readTxn)
@@ -848,9 +865,9 @@ function open(path, options) {
 			readTxnRenewed = null
 			readTxn = null
 		}
-		if (error.message.startsWith('MDB_MAP_FULL') || error.message.startsWith('MDB_MAP_RESIZED')) {
+		/*if (error.message.startsWith('MDBX_MAP_FULL') || error.message.startsWith('MDBX_MAP_RESIZED')) {
 			const oldSize = env.info().mapSize
-			const newSize = error.message.startsWith('MDB_MAP_FULL') ?
+			const newSize = error.message.startsWith('MDBX_MAP_FULL') ?
 				Math.floor(((1.06 + 3000 / Math.sqrt(oldSize)) * oldSize) / 0x100000) * 0x100000 : // increase size, more rapidly at first, and round to nearest 1 MB
 				0 // for resized notifications, we simply want to match the existing size of other processes
 			for (const store of stores) {
@@ -859,7 +876,7 @@ function open(path, options) {
 			env.resize(newSize)
 			let result = retry()
 			return result
-		}/* else if (error.message.startsWith('MDB_PAGE_NOTFOUND') || error.message.startsWith('MDB_CURSOR_FULL') || error.message.startsWith('MDB_CORRUPTED') || error.message.startsWith('MDB_INVALID')) {
+		}/* else if (error.message.startsWith('MDBX_PAGE_NOTFOUND') || error.message.startsWith('MDBX_CURSOR_FULL') || error.message.startsWith('MDBX_CORRUPTED') || error.message.startsWith('MDBX_INVALID')) {
 			// the noSync setting means that we can have partial corruption and we need to be able to recover
 			for (const store of stores) {
 				store.emit('remap')

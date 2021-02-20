@@ -1,0 +1,5 @@
+^\.github/actions/spelling/
+^\.github/FUNDING\.yml
+^\.travis\.yml$
+\.def$
+^packages/buildroot/

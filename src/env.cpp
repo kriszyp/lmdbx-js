@@ -1,5 +1,5 @@
 
-// This file is part of node-lmdb, the Node.js binding for lmdb
+// This file is part of node-lmdbx, the Node.js binding for lmdbx
 // Copyright (c) 2013-2017 Timur Kristóf
 // Copyright (c) 2021 Kristopher Tate
 // Licensed to you under the terms of the MIT license
@@ -22,7 +22,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-#include "node-lmdb.h"
+#include "node-lmdbx.h"
 
 using namespace v8;
 using namespace node;
@@ -50,7 +50,7 @@ EnvWrap::~EnvWrap() {
     // Close if not closed already
     if (this->env) {
         this->cleanupStrayTxns();
-        mdb_env_close(env);
+        mdbx_env_close(env);
     }
     if (this->compression)
         this->compression->Unref();
@@ -58,13 +58,13 @@ EnvWrap::~EnvWrap() {
 
 void EnvWrap::cleanupStrayTxns() {
     if (this->currentWriteTxn) {
-        mdb_txn_abort(this->currentWriteTxn->txn);
+        mdbx_txn_abort(this->currentWriteTxn->txn);
         this->currentWriteTxn->txn = nullptr;
         this->currentWriteTxn->removeFromEnvWrap();
     }
     while (this->readTxns.size()) {
         TxnWrap *tw = *this->readTxns.begin();
-        mdb_txn_abort(tw->txn);
+        mdbx_txn_abort(tw->txn);
         tw->removeFromEnvWrap();
         tw->txn = nullptr;
     }
@@ -76,11 +76,11 @@ NAN_METHOD(EnvWrap::ctor) {
     int rc;
 
     EnvWrap* ew = new EnvWrap();
-    rc = mdb_env_create(&(ew->env));
+    rc = mdbx_env_create(&(ew->env));
 
     if (rc != 0) {
-        mdb_env_close(ew->env);
-        return throwLmdbError(rc);
+        mdbx_env_close(ew->env);
+        return throwLmdbxError(rc);
     }
 
     ew->Wrap(info.This());
@@ -90,7 +90,7 @@ NAN_METHOD(EnvWrap::ctor) {
 }
 
 template<class T>
-int applyUint32Setting(int (*f)(MDB_env *, T), MDB_env* e, Local<Object> options, T dflt, const char* keyName) {
+int applyUint32Setting(int (*f)(MDBX_env *, T), MDBX_env* e, Local<Object> options, T dflt, const char* keyName) {
     int rc;
     const Local<Value> value = options->Get(Nan::GetCurrentContext(), Nan::New<String>(keyName).ToLocalChecked()).ToLocalChecked();
     if (value->IsUint32()) {
@@ -105,14 +105,14 @@ int applyUint32Setting(int (*f)(MDB_env *, T), MDB_env* e, Local<Object> options
 
 class SyncWorker : public Nan::AsyncWorker {
   public:
-    SyncWorker(MDB_env* env, Nan::Callback *callback)
+    SyncWorker(MDBX_env* env, Nan::Callback *callback)
       : Nan::AsyncWorker(callback), env(env) {}
 
     void Execute() {
-        int rc = mdb_env_sync(env, 1);
+/*       int rc = mdbx_env_sync(env, 1);
         if (rc != 0) {
-            SetErrorMessage(mdb_strerror(rc));
-        }
+            SetErrorMessage(mdbx_strerror(rc));
+        }*/
     }
 
     void HandleOKCallback() {
@@ -125,12 +125,12 @@ class SyncWorker : public Nan::AsyncWorker {
     }
 
   private:
-    MDB_env* env;
+    MDBX_env* env;
 };
 
 class CopyWorker : public Nan::AsyncWorker {
   public:
-    CopyWorker(MDB_env* env, char* inPath, int flags, Nan::Callback *callback)
+    CopyWorker(MDBX_env* env, char* inPath, int flags, Nan::Callback *callback)
       : Nan::AsyncWorker(callback), env(env), path(strdup(inPath)), flags(flags) {
       }
     ~CopyWorker() {
@@ -138,11 +138,11 @@ class CopyWorker : public Nan::AsyncWorker {
     }
 
     void Execute() {
-        int rc = mdb_env_copy2(env, path, flags);
+/*        int rc = mdbx_env_copy2(env, path, flags);
         if (rc != 0) {
             fprintf(stderr, "Error on copy code: %u\n", rc);
             SetErrorMessage("Error on copy");
-        }
+        }*/
     }
 
     void HandleOKCallback() {
@@ -155,28 +155,28 @@ class CopyWorker : public Nan::AsyncWorker {
     }
 
   private:
-    MDB_env* env;
+    MDBX_env* env;
     char* path;
     int flags;
 };
 
 struct condition_t {
-    MDB_val key;
-    MDB_val data;
-    MDB_dbi dbi;
+    MDBX_val key;
+    MDBX_val data;
+    MDBX_dbi dbi;
     bool matchSize;
     argtokey_callback_t freeKey;
 };
 
 struct action_t {
     int actionType;
-    MDB_val key;
+    MDBX_val key;
     union {
         struct {
             DbiWrap* dw;
         };
         struct {
-            MDB_val data;
+            MDBX_val data;
             double ifVersion;
             double version;
             argtokey_callback_t freeValue;
@@ -184,8 +184,8 @@ struct action_t {
     };
 };/*
 struct action_t {
-    MDB_val key;
-    MDB_val data;
+    MDBX_val key;
+    MDBX_val data;
     DbiWrap* dw;
     condition_t *condition;
     double ifVersion;
@@ -207,8 +207,8 @@ const int NOT_FOUND = 2;
 
 class BatchWorker : public Nan::AsyncWorker {
   public:
-    BatchWorker(MDB_env* env, action_t *actions, int actionCount, int putFlags, KeySpace* keySpace, uint8_t* results, Nan::Callback *callback)
-      : Nan::AsyncWorker(callback, "node-lmdb:Batch"),
+    BatchWorker(MDBX_env* env, action_t *actions, int actionCount, int putFlags, KeySpace* keySpace, uint8_t* results, Nan::Callback *callback)
+      : Nan::AsyncWorker(callback, "node-lmdbx:Batch"),
       env(env),
       actionCount(actionCount),
       results(results),
@@ -224,7 +224,7 @@ class BatchWorker : public Nan::AsyncWorker {
     }
 
     void Execute() {
-        MDB_txn *txn;
+        MDBX_txn *txn;
         // we do compression in this thread to offload from main thread, but do it before transaction to minimize time that the transaction is open
         DbiWrap* dw;
         for (int i = 0; i < actionCount; i++) {
@@ -239,9 +239,9 @@ class BatchWorker : public Nan::AsyncWorker {
                 }
             }
         }
-        int rc = mdb_txn_begin(env, nullptr, 0, &txn);
+        int rc = mdbx_txn_begin(env, nullptr, MDBX_TXN_READWRITE, &txn);
         if (rc != 0) {
-            return SetErrorMessage(mdb_strerror(rc));
+            return SetErrorMessage(mdbx_strerror(rc));
         }
         int validatedDepth = 0;
         int conditionDepth = 0;
@@ -268,10 +268,10 @@ class BatchWorker : public Nan::AsyncWorker {
                 results[i] = FAILED_CONDITION;
                 validated = false;
             } else if (actionType & CONDITION) { // has precondition
-                MDB_val value;
+                MDBX_val value;
                 // TODO: Use a cursor
-                rc = mdb_get(txn, dw->dbi, &action->key, &value);
-                if (rc == MDB_BAD_VALSIZE) {
+                rc = mdbx_get(txn, dw->dbi, &action->key, &value);
+                if (rc == MDBX_BAD_VALSIZE) {
                     results[i] = BAD_KEY;
                     validated = false;
                 } else {
@@ -282,7 +282,7 @@ class BatchWorker : public Nan::AsyncWorker {
                         if (rc)
                             validated = false;
                         else
-                            validated = action->ifVersion == *((double*)value.mv_data);
+                            validated = action->ifVersion == *((double*)value.iov_base);
                     }
                     results[i] = validated ? SUCCESSFUL_OPERATION : FAILED_CONDITION;
                 }
@@ -294,8 +294,8 @@ class BatchWorker : public Nan::AsyncWorker {
             if (actionType & (WRITE_WITH_VALUE | DELETE_OPERATION)) { // has write operation to perform
                 if (validated) {
                     if (actionType & DELETE_OPERATION) {
-                        rc = mdb_del(txn, dw->dbi, &action->key, (actionType & WRITE_WITH_VALUE) ? &action->data : nullptr);
-                        if (rc == MDB_NOTFOUND) {
+                        rc = mdbx_del(txn, dw->dbi, &action->key, (actionType & WRITE_WITH_VALUE) ? &action->data : nullptr);
+                        if (rc == MDBX_NOTFOUND) {
                             rc = 0; // ignore not_found errors
                             results[i] = NOT_FOUND;
                         }
@@ -303,15 +303,15 @@ class BatchWorker : public Nan::AsyncWorker {
                         if (dw->hasVersions)
                             rc = putWithVersion(txn, dw->dbi, &action->key, &action->data, putFlags, action->version);
                         else
-                            rc = mdb_put(txn, dw->dbi, &action->key, &action->data, putFlags);
+                            rc = mdbx_put(txn, dw->dbi, &action->key, &action->data, (MDBX_put_flags_t) putFlags);
                     }
                     if (rc != 0) {
-                        if (rc == MDB_BAD_VALSIZE) {
+                        if (rc == MDBX_BAD_VALSIZE) {
                             results[i] = BAD_KEY;
                             rc = 0;
                         } else {
-                            mdb_txn_abort(txn);
-                            return SetErrorMessage(mdb_strerror(rc));
+                            mdbx_txn_abort(txn);
+                            return SetErrorMessage(mdbx_strerror(rc));
                         }
                     }
                 }
@@ -327,12 +327,12 @@ class BatchWorker : public Nan::AsyncWorker {
             i++;
         }
 
-        rc = mdb_txn_commit(txn);
+        rc = mdbx_txn_commit(txn);
         if (rc != 0) {
             if ((putFlags & 1) > 0) // sync mode
-                return Nan::ThrowError(mdb_strerror(rc));
+                return Nan::ThrowError(mdbx_strerror(rc));
             else
-                return SetErrorMessage(mdb_strerror(rc));
+                return SetErrorMessage(mdbx_strerror(rc));
         }
     }
 
@@ -347,7 +347,7 @@ class BatchWorker : public Nan::AsyncWorker {
     }
 
   private:
-    MDB_env* env;
+    MDBX_env* env;
     int actionCount;
     uint8_t* results;
     int resultIndex = 0;
@@ -358,17 +358,12 @@ class BatchWorker : public Nan::AsyncWorker {
     friend class DbiWrap;
 };
 
-static int encfunc(const MDB_val* src, MDB_val* dst, const MDB_val* key, int encdec)
-{
-    chacha8(src->mv_data, src->mv_size, (uint8_t*) key[0].mv_data, (uint8_t*) key[1].mv_data, (char*)dst->mv_data);
-    return 0;
-}
 
 NAN_METHOD(EnvWrap::open) {
     Nan::HandleScope scope;
 
     int rc;
-    int flags = 0;
+    MDBX_env_flags_t flags = MDBX_ENV_DEFAULTS;
 
     // Get the wrapper
     EnvWrap *ew = Nan::ObjectWrap::Unwrap<EnvWrap>(info.This());
@@ -386,7 +381,7 @@ NAN_METHOD(EnvWrap::open) {
         char* existingPath = envPath.path;
         if (!strcmp(existingPath, *charPath)) {
             envPath.count++;
-            mdb_env_close(ew->env);
+            mdbx_env_close(ew->env);
             ew->env = envPath.env;
             uv_mutex_unlock(envsLock);
             return;
@@ -394,20 +389,28 @@ NAN_METHOD(EnvWrap::open) {
     }
 
     // Parse the maxDbs option
-    rc = applyUint32Setting<unsigned>(&mdb_env_set_maxdbs, ew->env, options, 1, "maxDbs");
+    rc = applyUint32Setting<unsigned>(&mdbx_env_set_maxdbs, ew->env, options, 1, "maxDbs");
     if (rc != 0) {
         uv_mutex_unlock(envsLock);
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
 
     // Parse the mapSize option
     Local<Value> mapSizeOption = options->Get(Nan::GetCurrentContext(), Nan::New<String>("mapSize").ToLocalChecked()).ToLocalChecked();
+    fprintf(stderr, "Checking mapSize\n");
     if (mapSizeOption->IsNumber()) {
-        mdb_size_t mapSizeSizeT = mapSizeOption->IntegerValue(Nan::GetCurrentContext()).FromJust();
-        rc = mdb_env_set_mapsize(ew->env, mapSizeSizeT);
+        intptr_t mapSizeSizeT = mapSizeOption->NumberValue(Nan::GetCurrentContext()).FromJust();
+        fprintf(stderr, "Got mapSize %u\n", mapSizeSizeT > 100);
+        intptr_t size_lower = 0x4000;
+        intptr_t size_upper = 0x10000000000;
+        intptr_t growth_step = 0x1000;
+        intptr_t shrink_threshold = 0x2000;
+        intptr_t pagesize = 0x1000;
+        rc = mdbx_env_set_geometry(ew->env, 0x4000, 0x4000, mapSizeSizeT, 0x1000, 0x2000, 0x1000);
+        fprintf(stderr, "Set mapSize %llu\n", mapSizeSizeT);
         if (rc != 0) {
             uv_mutex_unlock(envsLock);
-            return throwLmdbError(rc);
+            return throwLmdbxError(rc);
         }
     }
     Local<Value> compressionOption = options->Get(Nan::GetCurrentContext(), Nan::New<String>("compression").ToLocalChecked()).ToLocalChecked();
@@ -416,61 +419,45 @@ NAN_METHOD(EnvWrap::open) {
         ew->compression->Ref();
     }
 
-    Local<Value> encryptionKey = options->Get(Nan::GetCurrentContext(), Nan::New<String>("encryptionKey").ToLocalChecked()).ToLocalChecked();
-    if (!encryptionKey->IsUndefined()) {
-        MDB_val enckey;
-        KeySpace* keySpace = new KeySpace(false);
-        rc = valueToMDBKey(encryptionKey, enckey, *keySpace);
-        if (!rc)
-            return Nan::ThrowError("Bad encryption key");
-        if (enckey.mv_size != 32) {
-            return Nan::ThrowError("Encryption key must be 32 bytes long");
-        }
-        rc = mdb_env_set_encrypt(ew->env, encfunc, &enckey, 0);
-        if (rc != 0) {
-            return throwLmdbError(rc);
-        }
-    }
-
     // Parse the maxReaders option
-    // NOTE: mdb.c defines DEFAULT_READERS as 126
-    rc = applyUint32Setting<unsigned>(&mdb_env_set_maxreaders, ew->env, options, 126, "maxReaders");
+    // NOTE: mdbx.c defines DEFAULT_READERS as 126
+    rc = applyUint32Setting<unsigned>(&mdbx_env_set_maxreaders, ew->env, options, 126, "maxReaders");
     if (rc != 0) {
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
 
-    // NOTE: MDB_FIXEDMAP is not exposed here since it is "highly experimental" + it is irrelevant for this use case
-    // NOTE: MDB_NOTLS is not exposed here because it is irrelevant for this use case, as node will run all this on a single thread anyway
-    setFlagFromValue(&flags, MDB_NOSUBDIR, "noSubdir", false, options);
-    setFlagFromValue(&flags, MDB_RDONLY, "readOnly", false, options);
-    setFlagFromValue(&flags, MDB_WRITEMAP, "useWritemap", false, options);
-    setFlagFromValue(&flags, MDB_PREVSNAPSHOT, "usePreviousSnapshot", false, options);
-    setFlagFromValue(&flags, MDB_NOMEMINIT , "noMemInit", false, options);
-    setFlagFromValue(&flags, MDB_NORDAHEAD , "noReadAhead", false, options);
-    setFlagFromValue(&flags, MDB_NOMETASYNC, "noMetaSync", false, options);
-    setFlagFromValue(&flags, MDB_NOSYNC, "noSync", false, options);
-    setFlagFromValue(&flags, MDB_MAPASYNC, "mapAsync", false, options);
-    setFlagFromValue(&flags, MDB_NOLOCK, "unsafeNoLock", false, options);
+    // NOTE: MDBX_FIXEDMAP is not exposed here since it is "highly experimental" + it is irrelevant for this use case
+    // NOTE: MDBX_NOTLS is not exposed here because it is irrelevant for this use case, as node will run all this on a single thread anyway
+    setFlagFromValue(&(int)flags, (int)MDBX_NOSUBDIR, "noSubdir", false, options);
+    setFlagFromValue(&(int)flags, (int)MDBX_RDONLY, "readOnly", false, options);
+    setFlagFromValue(&(int)flags, (int)MDBX_WRITEMAP, "useWritemap", false, options);
+    //setFlagFromValue(&flags, MDBX_PREVSNAPSHOT, "usePreviousSnapshot", false, options);
+    setFlagFromValue(&(int)flags, (int)MDBX_NOMEMINIT , "noMemInit", false, options);
+    setFlagFromValue(&(int)flags, (int)MDBX_NORDAHEAD , "noReadAhead", false, options);
+    setFlagFromValue(&(int)flags, (int)MDBX_NOMETASYNC, "noMetaSync", false, options);
+    setFlagFromValue(&(int)flags, (int)MDBX_SAFE_NOSYNC, "noSync", false, options);
+    setFlagFromValue(&(int)flags, (int)MDBX_MAPASYNC, "mapAsync", false, options);
+    //setFlagFromValue(&flags, MDBX_NOLOCK, "unsafeNoLock", false, options);*/
 
-    if (flags & MDB_NOLOCK) {
-        fprintf(stderr, "You chose to use MDB_NOLOCK which is not officially supported by node-lmdb. You have been warned!\n");
-    }
+    /*if ((int) flags & (int) MDBX_NOLOCK) {
+        fprintf(stderr, "You chose to use MDBX_NOLOCK which is not officially supported by node-lmdbx. You have been warned!\n");
+    }*/
 
-    // Set MDB_NOTLS to enable multiple read-only transactions on the same thread (in this case, the nodejs main thread)
-    flags |= MDB_NOTLS;
+    // Set MDBX_NOTLS to enable multiple read-only transactions on the same thread (in this case, the nodejs main thread)
+    flags |= MDBX_NOTLS;
 
     // TODO: make file attributes configurable
     #if NODE_VERSION_AT_LEAST(12,0,0)
-    rc = mdb_env_open(ew->env, *String::Utf8Value(Isolate::GetCurrent(), path), flags, 0664);
+    rc = mdbx_env_open(ew->env, *String::Utf8Value(Isolate::GetCurrent(), path), flags, 0664);
     #else
-    rc = mdb_env_open(ew->env, *String::Utf8Value(path), flags, 0664);
+    rc = mdbx_env_open(ew->env, *String::Utf8Value(path), flags, 0664);
     #endif
 
     if (rc != 0) {
-        mdb_env_close(ew->env);
+        mdbx_env_close(ew->env);
         uv_mutex_unlock(envsLock);
         ew->env = nullptr;
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
     env_path_t envPath;
     envPath.path = strdup(*charPath);
@@ -500,21 +487,21 @@ NAN_METHOD(EnvWrap::resize) {
         return Nan::ThrowError("Only call env.resize() when there are no active transactions. Please close all transactions before calling env.resize().");
     }
 
-    mdb_size_t mapSizeSizeT = info[0]->IntegerValue(Nan::GetCurrentContext()).FromJust();
-    int rc = mdb_env_set_mapsize(ew->env, mapSizeSizeT);
+    size_t mapSizeSizeT = info[0]->IntegerValue(Nan::GetCurrentContext()).FromJust();
+    int rc = mdbx_env_set_mapsize(ew->env, mapSizeSizeT);
     if (rc == EINVAL) {
         //fprintf(stderr, "Resize failed, will try to get transaction and try again");
-        MDB_txn *txn;
-        rc = mdb_txn_begin(ew->env, nullptr, 0, &txn);
+        MDBX_txn *txn;
+        rc = mdbx_txn_begin(ew->env, nullptr, MDBX_TXN_READWRITE, &txn);
         if (rc != 0)
-            return throwLmdbError(rc);
-        rc = mdb_txn_commit(txn);
+            return throwLmdbxError(rc);
+        rc = mdbx_txn_commit(txn);
         if (rc != 0)
-            return throwLmdbError(rc);
-        rc = mdb_env_set_mapsize(ew->env, mapSizeSizeT);
+            return throwLmdbxError(rc);
+        rc = mdbx_env_set_mapsize(ew->env, mapSizeSizeT);
     }
     if (rc != 0) {
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
 }
 
@@ -534,7 +521,7 @@ NAN_METHOD(EnvWrap::close) {
             if (envPath->count <= 0) {
                 // last thread using it, we can really close it now
                 envs.erase(envPath);
-                mdb_env_close(ew->env);
+                mdbx_env_close(ew->env);
             }
             break;
         }
@@ -555,11 +542,11 @@ NAN_METHOD(EnvWrap::stat) {
     }
 
     int rc;
-    MDB_stat stat;
+    MDBX_stat stat;
 
-    rc = mdb_env_stat(ew->env, &stat);
+    rc = mdbx_env_stat(ew->env, &stat, sizeof(MDBX_stat));
     if (rc != 0) {
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
 
     Local<Context> context = Nan::GetCurrentContext();
@@ -590,11 +577,11 @@ NAN_METHOD(EnvWrap::freeStat) {
     TxnWrap *txn = Nan::ObjectWrap::Unwrap<TxnWrap>(Local<Object>::Cast(info[0]));
 
     int rc;
-    MDB_stat stat;
+    MDBX_stat stat;
 
-    rc = mdb_stat(txn->txn, 0, &stat);
+    rc = mdbx_dbi_stat(txn->txn, 0, &stat, sizeof(MDBX_stat));
     if (rc != 0) {
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
 
     Local<Context> context = Nan::GetCurrentContext();
@@ -619,27 +606,27 @@ NAN_METHOD(EnvWrap::info) {
     }
 
     int rc;
-    MDB_envinfo envinfo;
+    MDBX_envinfo envinfo;
 
-    rc = mdb_env_info(ew->env, &envinfo);
+    rc = mdbx_env_info(ew->env, &envinfo, sizeof(MDBX_envinfo));
     if (rc != 0) {
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
 
     Local<Context> context = Nan::GetCurrentContext();
     Local<Object> obj = Nan::New<Object>();
-    (void)obj->Set(context, Nan::New<String>("mapAddress").ToLocalChecked(), Nan::New<Number>((uint64_t) envinfo.me_mapaddr));
-    (void)obj->Set(context, Nan::New<String>("mapSize").ToLocalChecked(), Nan::New<Number>(envinfo.me_mapsize));
-    (void)obj->Set(context, Nan::New<String>("lastPageNumber").ToLocalChecked(), Nan::New<Number>(envinfo.me_last_pgno));
-    (void)obj->Set(context, Nan::New<String>("lastTxnId").ToLocalChecked(), Nan::New<Number>(envinfo.me_last_txnid));
-    (void)obj->Set(context, Nan::New<String>("maxReaders").ToLocalChecked(), Nan::New<Number>(envinfo.me_maxreaders));
-    (void)obj->Set(context, Nan::New<String>("numReaders").ToLocalChecked(), Nan::New<Number>(envinfo.me_numreaders));
+//    (void)obj->Set(context, Nan::New<String>("mapAddress").ToLocalChecked(), Nan::New<Number>((uint64_t) envinfo.mi_mapaddr));
+    (void)obj->Set(context, Nan::New<String>("mapSize").ToLocalChecked(), Nan::New<Number>(envinfo.mi_mapsize));
+    (void)obj->Set(context, Nan::New<String>("lastPageNumber").ToLocalChecked(), Nan::New<Number>(envinfo.mi_last_pgno));
+    //(void)obj->Set(context, Nan::New<String>("lastTxnId").ToLocalChecked(), Nan::New<Number>(envinfo.mi_last_txnid));
+    (void)obj->Set(context, Nan::New<String>("maxReaders").ToLocalChecked(), Nan::New<Number>(envinfo.mi_maxreaders));
+    (void)obj->Set(context, Nan::New<String>("numReaders").ToLocalChecked(), Nan::New<Number>(envinfo.mi_numreaders));
 
     info.GetReturnValue().Set(obj);
 }
 
 NAN_METHOD(EnvWrap::copy) {
-    Nan::HandleScope scope;
+    /*Nan::HandleScope scope;
 
     // Get the wrapper
     EnvWrap *ew = Nan::ObjectWrap::Unwrap<EnvWrap>(info.This());
@@ -659,7 +646,7 @@ NAN_METHOD(EnvWrap::copy) {
 
     int flags = 0;
     if (info.Length() > 1 && info[1]->IsTrue()) {
-        flags = MDB_CP_COMPACT;
+        flags = MDBX_CP_COMPACT;
     }
 
     Nan::Callback* callback = new Nan::Callback(
@@ -670,7 +657,7 @@ NAN_METHOD(EnvWrap::copy) {
       ew->env, *path, flags, callback
     );
 
-    Nan::AsyncQueueWorker(worker);
+    Nan::AsyncQueueWorker(worker);*/
 }
 
 NAN_METHOD(EnvWrap::detachBuffer) {
@@ -753,7 +740,7 @@ NAN_METHOD(EnvWrap::batchWrite) {
     int length = array->Length();
     action_t* actions = new action_t[length];
 
-    int putFlags = 0;
+    MDBX_put_flags_t putFlags = MDBX_UPSERT;
     KeySpace* keySpace = new KeySpace(false);
     Nan::Callback* callback;
     uint8_t* results = (uint8_t*) node::Buffer::Data(Local<Object>::Cast(info[1]));
@@ -761,10 +748,10 @@ NAN_METHOD(EnvWrap::batchWrite) {
 
     if (!info[2]->IsNull() && !info[2]->IsUndefined() && info[2]->IsObject() && !info[2]->IsFunction()) {
         Local<Object> optionsObject = Local<Object>::Cast(options);
-        setFlagFromValue(&putFlags, MDB_NODUPDATA, "noDupData", false, optionsObject);
-        setFlagFromValue(&putFlags, MDB_NOOVERWRITE, "noOverwrite", false, optionsObject);
-        setFlagFromValue(&putFlags, MDB_APPEND, "append", false, optionsObject);
-        setFlagFromValue(&putFlags, MDB_APPENDDUP, "appendDup", false, optionsObject);
+        setFlagFromValue(&(int) putFlags, (int) MDBX_NODUPDATA, "noDupData", false, optionsObject);
+        setFlagFromValue(&(int) putFlags, (int) MDBX_NOOVERWRITE, "noOverwrite", false, optionsObject);
+        setFlagFromValue(&(int) putFlags, (int) MDBX_APPEND, "append", false, optionsObject);
+        setFlagFromValue(&(int) putFlags, (int) MDBX_APPENDDUP, "appendDup", false, optionsObject);
         callback = new Nan::Callback(
             Local<v8::Function>::Cast(info[3])
         );
@@ -775,7 +762,7 @@ NAN_METHOD(EnvWrap::batchWrite) {
             );
         else {
             // sync mode
-            putFlags &= 1;
+            //putFlags &= ;
             callback = nullptr;
         }
     }
@@ -784,7 +771,7 @@ NAN_METHOD(EnvWrap::batchWrite) {
         ew->env, actions, length, putFlags, keySpace, results, callback
     );
     bool keyIsValid = false;
-    NodeLmdbKeyType keyType;
+    NodeLmdbxKeyType keyType;
     DbiWrap* dw;
 
     for (unsigned int i = 0; i < array->Length(); i++) {
@@ -815,8 +802,8 @@ NAN_METHOD(EnvWrap::batchWrite) {
             // just execute this the first time so we didn't need to re-execute for each iteration
             keyType = keyTypeFromOptions(options, dw->keyType);
         }
-        if (keyType == NodeLmdbKeyType::DefaultKey) {
-            keyIsValid = valueToMDBKey(key, action->key, *keySpace);
+        if (keyType == NodeLmdbxKeyType::DefaultKey) {
+            keyIsValid = valueToMDBXKey(key, action->key, *keySpace);
         }
         else {
             argToKey(key, action->key, keyType, keyIsValid);
@@ -866,14 +853,14 @@ NAN_METHOD(EnvWrap::batchWrite) {
             action->actionType = DELETE_OPERATION | (action->actionType & CONDITION); // only DELETE_OPERATION, no WRITE_WITH_VALUE
             action->freeValue = nullptr;
         } else if (value->IsArrayBufferView()) {
-            action->data.mv_size = node::Buffer::Length(value);
-            action->data.mv_data = node::Buffer::Data(value);
+            action->data.iov_len = node::Buffer::Length(value);
+            action->data.iov_base = node::Buffer::Data(value);
             action->freeValue = nullptr; // don't free, belongs to node
             //worker->SaveToPersistent(persistedIndex++, value); // this is coordinated to always be referenced on the JS side
         } else {
             writeValueToEntry(Nan::To<v8::String>(value).ToLocalChecked(), &action->data);
-            action->freeValue = ([](MDB_val &value) -> void {
-                delete[] (char*)value.mv_data;
+            action->freeValue = ([](MDBX_val &value) -> void {
+                delete[] (char*)value.iov_base;
             });
         }
     }
@@ -933,8 +920,8 @@ void EnvWrap::setupExports(Local<Object> exports) {
     txnTpl->PrototypeTemplate()->Set(isolate, "del", Nan::New<FunctionTemplate>(TxnWrap::del));
     txnTpl->PrototypeTemplate()->Set(isolate, "reset", Nan::New<FunctionTemplate>(TxnWrap::reset));
     txnTpl->PrototypeTemplate()->Set(isolate, "renew", Nan::New<FunctionTemplate>(TxnWrap::renew));
-    // TODO: wrap mdb_cmp too
-    // TODO: wrap mdb_dcmp too
+    // TODO: wrap mdbx_cmp too
+    // TODO: wrap mdbx_dcmp too
     // TxnWrap: Get constructor
     EnvWrap::txnCtor = new Nan::Persistent<Function>();
     EnvWrap::txnCtor->Reset( txnTpl->GetFunction(Nan::GetCurrentContext()).ToLocalChecked());
@@ -947,7 +934,7 @@ void EnvWrap::setupExports(Local<Object> exports) {
     dbiTpl->PrototypeTemplate()->Set(isolate, "close", Nan::New<FunctionTemplate>(DbiWrap::close));
     dbiTpl->PrototypeTemplate()->Set(isolate, "drop", Nan::New<FunctionTemplate>(DbiWrap::drop));
     dbiTpl->PrototypeTemplate()->Set(isolate, "stat", Nan::New<FunctionTemplate>(DbiWrap::stat));
-    // TODO: wrap mdb_stat too
+    // TODO: wrap mdbx_stat too
     // DbiWrap: Get constructor
     EnvWrap::dbiCtor = new Nan::Persistent<Function>();
     EnvWrap::dbiCtor->Reset( dbiTpl->GetFunction(Nan::GetCurrentContext()).ToLocalChecked());

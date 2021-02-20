@@ -1,5 +1,5 @@
 
-// This file is part of node-lmdb, the Node.js binding for lmdb
+// This file is part of node-lmdbx, the Node.js binding for lmdbx
 // Copyright (c) 2013-2017 Timur Kristóf
 // Copyright (c) 2021 Kristopher Tate
 // Licensed to you under the terms of the MIT license
@@ -22,21 +22,21 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-#include "node-lmdb.h"
+#include "node-lmdbx.h"
 
 using namespace v8;
 using namespace node;
 
-TxnWrap::TxnWrap(MDB_env *env, MDB_txn *txn) {
+TxnWrap::TxnWrap(MDBX_env *env, MDBX_txn *txn) {
     this->env = env;
     this->txn = txn;
-    this->flags = 0;
+    this->flags = MDBX_TXN_READWRITE;
 }
 
 TxnWrap::~TxnWrap() {
     // Close if not closed already
     if (this->txn) {
-        mdb_txn_abort(txn);
+        mdbx_txn_abort(txn);
         this->removeFromEnvWrap();
     }
 }
@@ -62,28 +62,31 @@ NAN_METHOD(TxnWrap::ctor) {
     Nan::HandleScope scope;
 
     EnvWrap *ew = Nan::ObjectWrap::Unwrap<EnvWrap>(Local<Object>::Cast(info[0]));
-    int flags = 0;
+    MDBX_txn_flags_t flags = MDBX_TXN_READWRITE;
 
     if (info[1]->IsObject()) {
         Local<Object> options = Local<Object>::Cast(info[1]);
 
         // Get flags from options
 
-        setFlagFromValue(&flags, MDB_RDONLY, "readOnly", false, options);
+        setFlagFromValue(&(int)flags, (int)MDBX_TXN_RDONLY, "readOnly", false, options);
+    } else {
+    fprintf(stderr, "Beginning transaction\n");
+        
     }
     
     // Check existence of current write transaction
-    if (0 == (flags & MDB_RDONLY) && ew->currentWriteTxn != nullptr) {
+    if (0 == ((int)flags & (int)MDBX_TXN_RDONLY) && ew->currentWriteTxn != nullptr) {
         return Nan::ThrowError("You have already opened a write transaction in the current process, can't open a second one.");
     }
 
-    MDB_txn *txn;
-    int rc = mdb_txn_begin(ew->env, nullptr, flags, &txn);
+    MDBX_txn *txn;
+    int rc = mdbx_txn_begin(ew->env, nullptr, flags, &txn);
     if (rc != 0) {
         if (rc == EINVAL) {
-            return Nan::ThrowError("Invalid parameter, which on MacOS is often due to more transactions than available robust locked semaphors (see node-lmdb docs for more info)");
+            return Nan::ThrowError("Invalid parameter, which on MacOS is often due to more transactions than available robust locked semaphors (see node-lmdbx docs for more info)");
         }
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
 
     TxnWrap* tw = new TxnWrap(ew->env, txn);
@@ -93,7 +96,7 @@ NAN_METHOD(TxnWrap::ctor) {
     tw->Wrap(info.This());
     
     // Set the current write transaction
-    if (0 == (flags & MDB_RDONLY)) {
+    if (0 == ((int)flags & (int)MDBX_TXN_RDONLY)) {
         ew->currentWriteTxn = tw;
     }
     else {
@@ -112,12 +115,13 @@ NAN_METHOD(TxnWrap::commit) {
         return Nan::ThrowError("The transaction is already closed.");
     }
 
-    int rc = mdb_txn_commit(tw->txn);
+    int rc = mdbx_txn_commit(tw->txn);
+    fprintf(stderr, "Committed transaction\n");
     tw->removeFromEnvWrap();
     tw->txn = nullptr;
 
     if (rc != 0) {
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
 }
 
@@ -130,7 +134,7 @@ NAN_METHOD(TxnWrap::abort) {
         return Nan::ThrowError("The transaction is already closed.");
     }
 
-    mdb_txn_abort(tw->txn);
+    mdbx_txn_abort(tw->txn);
     tw->removeFromEnvWrap();
     tw->txn = nullptr;
 }
@@ -144,7 +148,7 @@ NAN_METHOD(TxnWrap::reset) {
         return Nan::ThrowError("The transaction is already closed.");
     }
 
-    mdb_txn_reset(tw->txn);
+    mdbx_txn_reset(tw->txn);
 }
 
 NAN_METHOD(TxnWrap::renew) {
@@ -156,13 +160,13 @@ NAN_METHOD(TxnWrap::renew) {
         return Nan::ThrowError("The transaction is already closed.");
     }
 
-    int rc = mdb_txn_renew(tw->txn);
+    int rc = mdbx_txn_renew(tw->txn);
     if (rc != 0) {
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
 }
 
-Nan::NAN_METHOD_RETURN_TYPE TxnWrap::getCommon(Nan::NAN_METHOD_ARGS_TYPE info, Local<Value> (*successFunc)(MDB_val&)) {
+Nan::NAN_METHOD_RETURN_TYPE TxnWrap::getCommon(Nan::NAN_METHOD_ARGS_TYPE info, Local<Value> (*successFunc)(MDBX_val&)) {
     Nan::HandleScope scope;
     
     if (info.Length() != 2 && info.Length() != 3) {
@@ -176,7 +180,7 @@ Nan::NAN_METHOD_RETURN_TYPE TxnWrap::getCommon(Nan::NAN_METHOD_ARGS_TYPE info, L
         return Nan::ThrowError("The transaction is already closed.");
     }
 
-    MDB_val key, oldkey, data;
+    MDBX_val key, oldkey, data;
     auto keyType = keyTypeFromOptions(info[2], dw->keyType);
     bool keyIsValid;
     auto freeKey = argToKey(info[1], key, keyType, keyIsValid);
@@ -185,24 +189,24 @@ Nan::NAN_METHOD_RETURN_TYPE TxnWrap::getCommon(Nan::NAN_METHOD_ARGS_TYPE info, L
         return;
     }
 
-    // Bookkeeping for old key so that we can free it even if key will point inside LMDB
-    oldkey.mv_data = key.mv_data;
-    oldkey.mv_size = key.mv_size;
-    //fprintf(stderr, "the key is %s\n", key.mv_data);
+    // Bookkeeping for old key so that we can free it even if key will point inside LMDBX
+    oldkey.iov_base = key.iov_base;
+    oldkey.iov_len = key.iov_len;
+    //fprintf(stderr, "the key is %s\n", key.iov_base);
 
-    int rc = mdb_get(tw->txn, dw->dbi, &key, &data);
+    int rc = mdbx_get(tw->txn, dw->dbi, &key, &data);
 
     
     if (freeKey) {
         freeKey(oldkey);
     }
 
-    if (rc == MDB_NOTFOUND) {
+    if (rc == MDBX_NOTFOUND) {
         setLastVersion(NO_EXIST_VERSION);
         return info.GetReturnValue().Set(Nan::Undefined());
     }
     else if (rc != 0) {
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
     else {
         return info.GetReturnValue().Set(getVersionAndUncompress(data, dw, successFunc));
@@ -237,7 +241,7 @@ NAN_METHOD(TxnWrap::getBoolean) {
     return getCommon(info, valToBoolean);
 }
 
-Nan::NAN_METHOD_RETURN_TYPE TxnWrap::putCommon(Nan::NAN_METHOD_ARGS_TYPE info, void (*fillFunc)(Nan::NAN_METHOD_ARGS_TYPE info, MDB_val&), void (*freeData)(MDB_val&)) {
+Nan::NAN_METHOD_RETURN_TYPE TxnWrap::putCommon(Nan::NAN_METHOD_ARGS_TYPE info, void (*fillFunc)(Nan::NAN_METHOD_ARGS_TYPE info, MDBX_val&), void (*freeData)(MDBX_val&)) {
     Nan::HandleScope scope;
     
     if (info.Length() != 3 && info.Length() != 4) {
@@ -251,8 +255,8 @@ Nan::NAN_METHOD_RETURN_TYPE TxnWrap::putCommon(Nan::NAN_METHOD_ARGS_TYPE info, v
         return Nan::ThrowError("The transaction is already closed.");
     }
 
-    int flags = 0;
-    MDB_val key, data;
+    MDBX_put_flags_t flags = MDBX_UPSERT;
+    MDBX_val key, data;
     auto keyType = keyTypeFromOptions(info[3], dw->keyType);
     bool keyIsValid;
     auto freeKey = argToKey(info[1], key, keyType, keyIsValid);
@@ -263,12 +267,12 @@ Nan::NAN_METHOD_RETURN_TYPE TxnWrap::putCommon(Nan::NAN_METHOD_ARGS_TYPE info, v
 
     if (info[3]->IsObject()) {
         auto options = Local<Object>::Cast(info[3]);
-        setFlagFromValue(&flags, MDB_NODUPDATA, "noDupData", false, options);
-        setFlagFromValue(&flags, MDB_NOOVERWRITE, "noOverwrite", false, options);
-        setFlagFromValue(&flags, MDB_APPEND, "append", false, options);
-        setFlagFromValue(&flags, MDB_APPENDDUP, "appendDup", false, options);
+        setFlagFromValue(&(int)flags, (int)MDBX_NODUPDATA, "noDupData", false, options);
+        setFlagFromValue(&(int)flags, (int)MDBX_NOOVERWRITE, "noOverwrite", false, options);
+        setFlagFromValue(&(int)flags, (int)MDBX_APPEND, "append", false, options);
+        setFlagFromValue(&(int)flags, (int)MDBX_APPENDDUP, "appendDup", false, options);
         
-        // NOTE: does not make sense to support MDB_RESERVE, because it wouldn't save the memcpy from V8 to lmdb
+        // NOTE: does not make sense to support MDBX_RESERVE, because it wouldn't save the memcpy from V8 to lmdbx
     }
 
     // Fill key and data
@@ -279,8 +283,8 @@ Nan::NAN_METHOD_RETURN_TYPE TxnWrap::putCommon(Nan::NAN_METHOD_ARGS_TYPE info, v
     }
     
     // Keep a copy of the original key and data, so we can free them
-    MDB_val originalKey = key;
-    MDB_val originalData = data;
+    MDBX_val originalKey = key;
+    MDBX_val originalData = data;
 
     int rc;
     if (dw->hasVersions) {
@@ -293,9 +297,9 @@ Nan::NAN_METHOD_RETURN_TYPE TxnWrap::putCommon(Nan::NAN_METHOD_ARGS_TYPE info, v
         rc = putWithVersion(tw->txn, dw->dbi, &key, &data, flags, version);
     }
     else
-        rc = mdb_put(tw->txn, dw->dbi, &key, &data, flags);
+        rc = mdbx_put(tw->txn, dw->dbi, &key, &data, flags);
     
-    // Free original key and data (what was supplied by the user, not what points to lmdb)
+    // Free original key and data (what was supplied by the user, not what points to lmdbx)
     if (freeKey) {
         freeKey(originalKey);
     }
@@ -305,23 +309,23 @@ Nan::NAN_METHOD_RETURN_TYPE TxnWrap::putCommon(Nan::NAN_METHOD_ARGS_TYPE info, v
 
     // Check result code
     if (rc != 0) {
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
 }
 
 NAN_METHOD(TxnWrap::putString) {
-    return putCommon(info, [](Nan::NAN_METHOD_ARGS_TYPE info, MDB_val &data) -> void {
+    return putCommon(info, [](Nan::NAN_METHOD_ARGS_TYPE info, MDBX_val &data) -> void {
         CustomExternalStringResource::writeTo(Local<String>::Cast(info[2]), &data);
-    }, [](MDB_val &data) -> void {
-        delete[] (char*)data.mv_data;
+    }, [](MDBX_val &data) -> void {
+        delete[] (char*)data.iov_base;
     });
 }
 
 NAN_METHOD(TxnWrap::putBinary) {
-    return putCommon(info, [](Nan::NAN_METHOD_ARGS_TYPE info, MDB_val &data) -> void {
-        data.mv_size = node::Buffer::Length(info[2]);
-        data.mv_data = node::Buffer::Data(info[2]);
-    }, [](MDB_val &) -> void {
+    return putCommon(info, [](Nan::NAN_METHOD_ARGS_TYPE info, MDBX_val &data) -> void {
+        data.iov_len = node::Buffer::Length(info[2]);
+        data.iov_base = node::Buffer::Data(info[2]);
+    }, [](MDBX_val &) -> void {
         // The data is owned by the node::Buffer so we don't need to free it.
     });
 }
@@ -334,11 +338,11 @@ static double numberToPut = 0.0;
 #endif
 
 NAN_METHOD(TxnWrap::putNumber) {
-    return putCommon(info, [](Nan::NAN_METHOD_ARGS_TYPE info, MDB_val &data) -> void {
+    return putCommon(info, [](Nan::NAN_METHOD_ARGS_TYPE info, MDBX_val &data) -> void {
         auto numberLocal = Nan::To<v8::Number>(info[2]).ToLocalChecked();
         numberToPut = numberLocal->Value();
-        data.mv_size = sizeof(double);
-        data.mv_data = &numberToPut;
+        data.iov_len = sizeof(double);
+        data.iov_base = &numberToPut;
     }, nullptr);
 }
 
@@ -350,20 +354,20 @@ static bool booleanToPut = false;
 #endif
 
 NAN_METHOD(TxnWrap::putBoolean) {
-    return putCommon(info, [](Nan::NAN_METHOD_ARGS_TYPE info, MDB_val &data) -> void {
+    return putCommon(info, [](Nan::NAN_METHOD_ARGS_TYPE info, MDBX_val &data) -> void {
         auto booleanLocal = Nan::To<v8::Boolean>(info[2]).ToLocalChecked();
         booleanToPut = booleanLocal->Value();
 
-        data.mv_size = sizeof(bool);
-        data.mv_data = &booleanToPut;
+        data.iov_len = sizeof(bool);
+        data.iov_base = &booleanToPut;
     }, nullptr);
 }
 
 NAN_METHOD(TxnWrap::putUtf8) {
-    return putCommon(info, [](Nan::NAN_METHOD_ARGS_TYPE info, MDB_val &data) -> void {
+    return putCommon(info, [](Nan::NAN_METHOD_ARGS_TYPE info, MDBX_val &data) -> void {
         writeValueToEntry(Local<String>::Cast(info[2]), &data);
-    }, [](MDB_val &data) -> void {
-        delete[] (char*)data.mv_data;
+    }, [](MDBX_val &data) -> void {
+        delete[] (char*)data.iov_base;
     });
 }
 
@@ -407,10 +411,10 @@ NAN_METHOD(TxnWrap::del) {
         dataHandle = Nan::Undefined();
     }
     else {
-        return Nan::ThrowError("Unknown arguments to cursor.del, this could be a node-lmdb bug!");
+        return Nan::ThrowError("Unknown arguments to cursor.del, this could be a node-lmdbx bug!");
     }
 
-    MDB_val key;
+    MDBX_val key;
     auto keyType = keyTypeFromOptions(options, dw->keyType);
     bool keyIsValid;
     auto freeKey = argToKey(info[1], key, keyType, keyIsValid);
@@ -420,31 +424,31 @@ NAN_METHOD(TxnWrap::del) {
     }
 
     // Set data if dupSort true and data given
-    MDB_val data;
+    MDBX_val data;
     bool freeData = false;
     
-    if ((dw->flags & MDB_DUPSORT) && !(dataHandle->IsUndefined())) {
+    if ((dw->flags & MDBX_DUPSORT) && !(dataHandle->IsUndefined())) {
         if (dataHandle->IsString()) {
             writeValueToEntry(dataHandle, &data);
             freeData = true;
         }
         else if (node::Buffer::HasInstance(dataHandle)) {
-            data.mv_size = node::Buffer::Length(dataHandle);
-            data.mv_data = node::Buffer::Data(dataHandle);
+            data.iov_len = node::Buffer::Length(dataHandle);
+            data.iov_base = node::Buffer::Data(dataHandle);
             freeData = true;
         }
         else if (dataHandle->IsNumber()) {
             auto numberLocal = Nan::To<v8::Number>(dataHandle).ToLocalChecked();
-            data.mv_size = sizeof(double);
-            data.mv_data = new double;
-            *reinterpret_cast<double*>(data.mv_data) = numberLocal->Value();
+            data.iov_len = sizeof(double);
+            data.iov_base = new double;
+            *reinterpret_cast<double*>(data.iov_base) = numberLocal->Value();
             freeData = true;
         }
         else if (dataHandle->IsBoolean()) {
             auto booleanLocal = Nan::To<v8::Boolean>(dataHandle).ToLocalChecked();
-            data.mv_size = sizeof(double);
-            data.mv_data = new bool;
-            *reinterpret_cast<bool*>(data.mv_data) = booleanLocal->Value();
+            data.iov_len = sizeof(double);
+            data.iov_base = new bool;
+            *reinterpret_cast<bool*>(data.iov_base) = booleanLocal->Value();
             freeData = true;
         }
         else {
@@ -452,7 +456,7 @@ NAN_METHOD(TxnWrap::del) {
         }
     }
 
-    int rc = mdb_del(tw->txn, dw->dbi, &key, freeData ? &data : nullptr);
+    int rc = mdbx_del(tw->txn, dw->dbi, &key, freeData ? &data : nullptr);
 
     if (freeKey) {
         freeKey(key);
@@ -460,24 +464,24 @@ NAN_METHOD(TxnWrap::del) {
     
     if (freeData) {
         if (dataHandle->IsString()) {
-            delete[] (uint16_t*)data.mv_data;
+            delete[] (uint16_t*)data.iov_base;
         }
         else if (node::Buffer::HasInstance(dataHandle)) {
             // I think the data is owned by the node::Buffer so we don't need to free it - need to clarify
         }
         else if (dataHandle->IsNumber()) {
-            delete (double*)data.mv_data;
+            delete (double*)data.iov_base;
         }
         else if (dataHandle->IsBoolean()) {
-            delete (bool*)data.mv_data;
+            delete (bool*)data.iov_base;
         }
     }
 
     if (rc != 0) {
-        if (rc == MDB_NOTFOUND) {
+        if (rc == MDBX_NOTFOUND) {
             return info.GetReturnValue().Set(Nan::False());
         }
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
     return info.GetReturnValue().Set(Nan::True());
 }

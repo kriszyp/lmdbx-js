@@ -1,5 +1,5 @@
 
-// This file is part of node-lmdb, the Node.js binding for lmdb
+// This file is part of node-lmdbx, the Node.js binding for lmdbx
 // Copyright (c) 2013-2017 Timur Kristóf
 // Copyright (c) 2021 Kristopher Tate
 // Licensed to you under the terms of the MIT license
@@ -22,15 +22,15 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-#include "node-lmdb.h"
+#include "node-lmdbx.h"
 #include <string.h>
 
 using namespace v8;
 using namespace node;
 
-CursorWrap::CursorWrap(MDB_cursor *cursor) {
+CursorWrap::CursorWrap(MDBX_cursor *cursor) {
     this->cursor = cursor;
-    this->keyType = NodeLmdbKeyType::StringKey;
+    this->keyType = NodeLmdbxKeyType::StringKey;
     this->freeKey = nullptr;
 }
 
@@ -39,7 +39,7 @@ CursorWrap::~CursorWrap() {
         this->dw->Unref();
         this->tw->Unref();
         // Don't close cursor here, it is possible that the environment may already be closed, which causes it to crash
-        //mdb_cursor_close(this->cursor);
+        //mdbx_cursor_close(this->cursor);
     }
     if (this->freeKey) {
         this->freeKey(this->key);
@@ -66,15 +66,15 @@ NAN_METHOD(CursorWrap::ctor) {
 
     // Get key type
     auto keyType = keyTypeFromOptions(info[2], dw->keyType);
-    if (dw->keyType == NodeLmdbKeyType::Uint32Key && keyType != NodeLmdbKeyType::Uint32Key) {
+    if (dw->keyType == NodeLmdbxKeyType::Uint32Key && keyType != NodeLmdbxKeyType::Uint32Key) {
         return Nan::ThrowError("You specified keyIsUint32 on the Dbi, so you can't use other key types with it.");
     }
 
     // Open the cursor
-    MDB_cursor *cursor;
-    int rc = mdb_cursor_open(tw->txn, dw->dbi, &cursor);
+    MDBX_cursor *cursor;
+    int rc = mdbx_cursor_open(tw->txn, dw->dbi, &cursor);
     if (rc != 0) {
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
 
     // Create wrapper
@@ -96,7 +96,7 @@ NAN_METHOD(CursorWrap::close) {
     if (!cw->cursor) {
       return Nan::ThrowError("cursor.close: Attempt to close a closed cursor!");
     }
-    mdb_cursor_close(cw->cursor);
+    mdbx_cursor_close(cw->cursor);
     cw->dw->Unref();
     cw->tw->Unref();
     cw->cursor = nullptr;
@@ -109,7 +109,7 @@ NAN_METHOD(CursorWrap::del) {
         return Nan::ThrowError("cursor.del: Incorrect number of arguments provided, arguments: options (optional).");
     }
 
-    int flags = 0;
+    MDBX_put_flags_t flags = MDBX_UPSERT;
 
     if (info.Length() == 1) {
         if (!info[0]->IsObject()) {
@@ -117,24 +117,24 @@ NAN_METHOD(CursorWrap::del) {
         }
         
         auto options = Nan::To<v8::Object>(info[0]).ToLocalChecked();
-        setFlagFromValue(&flags, MDB_NODUPDATA, "noDupData", false, options);
+        setFlagFromValue(&(int)flags, (int)MDBX_NODUPDATA, "noDupData", false, options);
     }
 
     CursorWrap *cw = Nan::ObjectWrap::Unwrap<CursorWrap>(info.This());
 
-    int rc = mdb_cursor_del(cw->cursor, flags);
+    int rc = mdbx_cursor_del(cw->cursor, flags);
     if (rc != 0) {
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
 }
 
 Nan::NAN_METHOD_RETURN_TYPE CursorWrap::getCommon(
     Nan::NAN_METHOD_ARGS_TYPE info,
-    MDB_cursor_op op,
-    argtokey_callback_t (*setKey)(CursorWrap* cw, Nan::NAN_METHOD_ARGS_TYPE info, MDB_val&, bool&),
-    void (*setData)(CursorWrap* cw, Nan::NAN_METHOD_ARGS_TYPE info, MDB_val&),
-    void (*freeData)(CursorWrap* cw, Nan::NAN_METHOD_ARGS_TYPE info, MDB_val&),
-    Local<Value> (*convertFunc)(MDB_val &data)
+    MDBX_cursor_op op,
+    argtokey_callback_t (*setKey)(CursorWrap* cw, Nan::NAN_METHOD_ARGS_TYPE info, MDBX_val&, bool&),
+    void (*setData)(CursorWrap* cw, Nan::NAN_METHOD_ARGS_TYPE info, MDBX_val&),
+    void (*freeData)(CursorWrap* cw, Nan::NAN_METHOD_ARGS_TYPE info, MDBX_val&),
+    Local<Value> (*convertFunc)(MDBX_val &data)
 ) {
     Nan::HandleScope scope;
 
@@ -164,20 +164,20 @@ Nan::NAN_METHOD_RETURN_TYPE CursorWrap::getCommon(
     }
 
     // Temporary thing, so that we can free up the data if we want to
-    MDB_val tempdata;
-    tempdata.mv_size = cw->data.mv_size;
-    tempdata.mv_data = cw->data.mv_data;
+    MDBX_val tempdata;
+    tempdata.iov_len = cw->data.iov_len;
+    tempdata.iov_base = cw->data.iov_base;
 
     // Temporary bookkeeping for the current key
-    MDB_val tempKey;
-    tempKey.mv_size = cw->key.mv_size;
-    tempKey.mv_data = cw->key.mv_data;
+    MDBX_val tempKey;
+    tempKey.iov_len = cw->key.iov_len;
+    tempKey.iov_base = cw->key.iov_base;
 
-    // Call LMDB
-    int rc = mdb_cursor_get(cw->cursor, &(cw->key), &(cw->data), op);
+    // Call LMDBX
+    int rc = mdbx_cursor_get(cw->cursor, &(cw->key), &(cw->data), op);
 
-    // Check if key points inside LMDB
-    if (tempKey.mv_data != cw->key.mv_data) {
+    // Check if key points inside LMDBX
+    if (tempKey.iov_base != cw->key.iov_base) {
         // cw->key points inside the database now,
         // so we should free the old key now.
         if (cw->freeKey) {
@@ -186,11 +186,11 @@ Nan::NAN_METHOD_RETURN_TYPE CursorWrap::getCommon(
         }
     }
 
-    if (rc == MDB_NOTFOUND) {
+    if (rc == MDBX_NOTFOUND) {
         return info.GetReturnValue().Set(Nan::Undefined());
     }
     else if (rc != 0) {
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
 
 
@@ -207,9 +207,9 @@ Nan::NAN_METHOD_RETURN_TYPE CursorWrap::getCommon(
                 // In this case, we expect the key/data pair to be correctly filled
                 constexpr const unsigned argc = 2;
                 Local<Value> keyHandle = Nan::Undefined();
-                if (cw->key.mv_size) {
-            //        fprintf(stdout, "cw->key.mv_size %u\n", cw->key.mv_size);
-              //      fprintf(stdout, "cw->key.mv_data %X %X %X\n", ((char*)cw->key.mv_data)[0], ((char*)cw->key.mv_data)[1], ((char*)cw->key.mv_data)[2]);
+                if (cw->key.iov_len) {
+            //        fprintf(stdout, "cw->key.iov_len %u\n", cw->key.iov_len);
+              //      fprintf(stdout, "cw->key.iov_base %X %X %X\n", ((char*)cw->key.iov_base)[0], ((char*)cw->key.iov_base)[1], ((char*)cw->key.iov_base)[2]);
                     keyHandle = keyToHandle(cw->key, cw->keyType);
                 }
                 Local<Value> argv[argc] = { keyHandle, dataHandle };
@@ -227,110 +227,110 @@ Nan::NAN_METHOD_RETURN_TYPE CursorWrap::getCommon(
     if (convertFunc) {
         return info.GetReturnValue().Set(dataHandle);
     }
-    else if (cw->key.mv_size) {
+    else if (cw->key.iov_len) {
         return info.GetReturnValue().Set(keyToHandle(cw->key, cw->keyType));
     }
 
     return info.GetReturnValue().Set(Nan::True());
 }
 
-Nan::NAN_METHOD_RETURN_TYPE CursorWrap::getCommon(Nan::NAN_METHOD_ARGS_TYPE info, MDB_cursor_op op) {
+Nan::NAN_METHOD_RETURN_TYPE CursorWrap::getCommon(Nan::NAN_METHOD_ARGS_TYPE info, MDBX_cursor_op op) {
     return getCommon(info, op, nullptr, nullptr, nullptr, nullptr);
 }
 
 NAN_METHOD(CursorWrap::getCurrentString) {
-    return getCommon(info, MDB_GET_CURRENT, nullptr, nullptr, nullptr, valToString);
+    return getCommon(info, MDBX_GET_CURRENT, nullptr, nullptr, nullptr, valToString);
 }
 
 NAN_METHOD(CursorWrap::getCurrentStringUnsafe) {
-    return getCommon(info, MDB_GET_CURRENT, nullptr, nullptr, nullptr, valToStringUnsafe);
+    return getCommon(info, MDBX_GET_CURRENT, nullptr, nullptr, nullptr, valToStringUnsafe);
 }
 
 NAN_METHOD(CursorWrap::getCurrentUtf8) {
-    return getCommon(info, MDB_GET_CURRENT, nullptr, nullptr, nullptr, valToUtf8);
+    return getCommon(info, MDBX_GET_CURRENT, nullptr, nullptr, nullptr, valToUtf8);
 }
 
 NAN_METHOD(CursorWrap::getCurrentBinary) {
-    return getCommon(info, MDB_GET_CURRENT, nullptr, nullptr, nullptr, valToBinary);
+    return getCommon(info, MDBX_GET_CURRENT, nullptr, nullptr, nullptr, valToBinary);
 }
 
 NAN_METHOD(CursorWrap::getCurrentBinaryUnsafe) {
-    return getCommon(info, MDB_GET_CURRENT, nullptr, nullptr, nullptr, valToBinaryUnsafe);
+    return getCommon(info, MDBX_GET_CURRENT, nullptr, nullptr, nullptr, valToBinaryUnsafe);
 }
 
 NAN_METHOD(CursorWrap::getCurrentNumber) {
-    return getCommon(info, MDB_GET_CURRENT, nullptr, nullptr, nullptr, valToNumber);
+    return getCommon(info, MDBX_GET_CURRENT, nullptr, nullptr, nullptr, valToNumber);
 }
 
 NAN_METHOD(CursorWrap::getCurrentBoolean) {
-    return getCommon(info, MDB_GET_CURRENT, nullptr, nullptr, nullptr, valToBoolean);
+    return getCommon(info, MDBX_GET_CURRENT, nullptr, nullptr, nullptr, valToBoolean);
 }
 
 NAN_METHOD(CursorWrap::getCurrentIsDatabase) {
-    CursorWrap* cw = Nan::ObjectWrap::Unwrap<CursorWrap>(info.This());
-    int isDatabase = mdb_cursor_is_db(cw->cursor);
-    return info.GetReturnValue().Set(Nan::New<Boolean>(isDatabase));
+    /*CursorWrap* cw = Nan::ObjectWrap::Unwrap<CursorWrap>(info.This());
+    int isDatabase = mdbx_cursor_is_db(cw->cursor);
+    return info.GetReturnValue().Set(Nan::New<Boolean>(isDatabase));*/
 }
 
 #define MAKE_GET_FUNC(name, op) NAN_METHOD(CursorWrap::name) { return getCommon(info, op); }
 
-MAKE_GET_FUNC(goToFirst, MDB_FIRST);
+MAKE_GET_FUNC(goToFirst, MDBX_FIRST);
 
-MAKE_GET_FUNC(goToLast, MDB_LAST);
+MAKE_GET_FUNC(goToLast, MDBX_LAST);
 
-MAKE_GET_FUNC(goToNext, MDB_NEXT);
+MAKE_GET_FUNC(goToNext, MDBX_NEXT);
 
-MAKE_GET_FUNC(goToPrev, MDB_PREV);
+MAKE_GET_FUNC(goToPrev, MDBX_PREV);
 
-MAKE_GET_FUNC(goToFirstDup, MDB_FIRST_DUP);
+MAKE_GET_FUNC(goToFirstDup, MDBX_FIRST_DUP);
 
-MAKE_GET_FUNC(goToLastDup, MDB_LAST_DUP);
+MAKE_GET_FUNC(goToLastDup, MDBX_LAST_DUP);
 
-MAKE_GET_FUNC(goToNextDup, MDB_NEXT_DUP);
+MAKE_GET_FUNC(goToNextDup, MDBX_NEXT_DUP);
 
-MAKE_GET_FUNC(goToPrevDup, MDB_PREV_DUP);
+MAKE_GET_FUNC(goToPrevDup, MDBX_PREV_DUP);
 
-MAKE_GET_FUNC(goToNextNoDup, MDB_NEXT_NODUP);
+MAKE_GET_FUNC(goToNextNoDup, MDBX_NEXT_NODUP);
 
-MAKE_GET_FUNC(goToPrevNoDup, MDB_PREV_NODUP);
+MAKE_GET_FUNC(goToPrevNoDup, MDBX_PREV_NODUP);
 
-static void fillDataFromArg1(CursorWrap* cw, Nan::NAN_METHOD_ARGS_TYPE info, MDB_val &data) {
+static void fillDataFromArg1(CursorWrap* cw, Nan::NAN_METHOD_ARGS_TYPE info, MDBX_val &data) {
     if (info[1]->IsString()) {
         CustomExternalStringResource::writeTo(Local<String>::Cast(info[1]), &data);
     }
     else if (node::Buffer::HasInstance(info[1])) {
-        data.mv_size = node::Buffer::Length(info[1]);
-        data.mv_data = node::Buffer::Data(info[1]);
+        data.iov_len = node::Buffer::Length(info[1]);
+        data.iov_base = node::Buffer::Data(info[1]);
     }
     else if (info[1]->IsNumber()) {
-        data.mv_size = sizeof(double);
-        data.mv_data = new double;
+        data.iov_len = sizeof(double);
+        data.iov_base = new double;
         auto local = Nan::To<v8::Number>(info[1]).ToLocalChecked();
-        *((double*)data.mv_data) = local->Value();
+        *((double*)data.iov_base) = local->Value();
     }
     else if (info[1]->IsBoolean()) {
-        data.mv_size = sizeof(double);
-        data.mv_data = new bool;
+        data.iov_len = sizeof(double);
+        data.iov_base = new bool;
         auto local = Nan::To<v8::Boolean>(info[1]).ToLocalChecked();
-        *((bool*)data.mv_data) = local->Value();
+        *((bool*)data.iov_base) = local->Value();
     }
     else {
         Nan::ThrowError("Invalid data type.");
     }
 }
 
-static void freeDataFromArg1(CursorWrap* cw, Nan::NAN_METHOD_ARGS_TYPE info, MDB_val &data) {
+static void freeDataFromArg1(CursorWrap* cw, Nan::NAN_METHOD_ARGS_TYPE info, MDBX_val &data) {
     if (info[1]->IsString()) {
-        delete[] (uint16_t*)data.mv_data;
+        delete[] (uint16_t*)data.iov_base;
     }
     else if (node::Buffer::HasInstance(info[1])) {
         // I think the data is owned by the node::Buffer so we don't need to free it - need to clarify
     }
     else if (info[1]->IsNumber()) {
-        delete (double*)data.mv_data;
+        delete (double*)data.iov_base;
     }
     else if (info[1]->IsBoolean()) {
-        delete (bool*)data.mv_data;
+        delete (bool*)data.iov_base;
     }
     else {
         Nan::ThrowError("Invalid data type.");
@@ -338,7 +338,7 @@ static void freeDataFromArg1(CursorWrap* cw, Nan::NAN_METHOD_ARGS_TYPE info, MDB
 }
 
 template<size_t keyIndex, size_t optionsIndex>
-inline argtokey_callback_t cursorArgToKey(CursorWrap* cw, Nan::NAN_METHOD_ARGS_TYPE info, MDB_val &key, bool &keyIsValid) {
+inline argtokey_callback_t cursorArgToKey(CursorWrap* cw, Nan::NAN_METHOD_ARGS_TYPE info, MDBX_val &key, bool &keyIsValid) {
     auto keyType = keyTypeFromOptions(info[optionsIndex], cw->keyType);
     return argToKey(info[keyIndex], key, keyType, keyIsValid);
 }
@@ -347,28 +347,28 @@ NAN_METHOD(CursorWrap::goToKey) {
     if (info.Length() != 1 && info.Length() != 2) {
         return Nan::ThrowError("You called cursor.goToKey with an incorrect number of arguments. Arguments are: key (mandatory), options (optional).");
     }
-    return getCommon(info, MDB_SET_KEY, cursorArgToKey<0, 1>, nullptr, nullptr, nullptr);
+    return getCommon(info, MDBX_SET_KEY, cursorArgToKey<0, 1>, nullptr, nullptr, nullptr);
 }
 
 NAN_METHOD(CursorWrap::goToRange) {
     if (info.Length() != 1 && info.Length() != 2) {
         return Nan::ThrowError("You called cursor.goToRange with an incorrect number of arguments. Arguments are: key (mandatory), options (optional).");
     }
-    return getCommon(info, MDB_SET_RANGE, cursorArgToKey<0, 1>, nullptr, nullptr, nullptr);
+    return getCommon(info, MDBX_SET_RANGE, cursorArgToKey<0, 1>, nullptr, nullptr, nullptr);
 }
 
 NAN_METHOD(CursorWrap::goToDup) {
     if (info.Length() != 2 && info.Length() != 3) {
         return Nan::ThrowError("You called cursor.goToDup with an incorrect number of arguments. Arguments are: key (mandatory), data (mandatory), options (optional).");
     }
-    return getCommon(info, MDB_GET_BOTH, cursorArgToKey<0, 2>, fillDataFromArg1, freeDataFromArg1, nullptr);
+    return getCommon(info, MDBX_GET_BOTH, cursorArgToKey<0, 2>, fillDataFromArg1, freeDataFromArg1, nullptr);
 }
 
 NAN_METHOD(CursorWrap::goToDupRange) {
     if (info.Length() != 2 && info.Length() != 3) {
         return Nan::ThrowError("You called cursor.goToDupRange with an incorrect number of arguments. Arguments are: key (mandatory), data (mandatory), options (optional).");
     }
-    return getCommon(info, MDB_GET_BOTH_RANGE, cursorArgToKey<0, 2>, fillDataFromArg1, freeDataFromArg1, nullptr);
+    return getCommon(info, MDBX_GET_BOTH_RANGE, cursorArgToKey<0, 2>, fillDataFromArg1, freeDataFromArg1, nullptr);
 }
 
 void CursorWrap::setupExports(Local<Object> exports) {

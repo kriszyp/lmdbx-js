@@ -1,5 +1,5 @@
 
-// This file is part of node-lmdb, the Node.js binding for lmdb
+// This file is part of node-lmdbx, the Node.js binding for lmdbx
 // Copyright (c) 2013-2017 Timur Kristóf
 // Copyright (c) 2021 Kristopher Tate
 // Licensed to you under the terms of the MIT license
@@ -23,7 +23,7 @@
 // THE SOFTWARE.
 
 #include "lz4.h"
-#include "node-lmdb.h"
+#include "node-lmdbx.h"
 
 using namespace v8;
 using namespace node;
@@ -84,10 +84,10 @@ void Compression::makeUnsafeBuffer() {
     unsafeBuffer.Reset(Isolate::GetCurrent(), newBuffer);
 }
 
-void Compression::decompress(MDB_val& data, bool &isValid) {
+void Compression::decompress(MDBX_val& data, bool &isValid) {
     uint32_t uncompressedLength;
     int compressionHeaderSize;
-    unsigned char* charData = (unsigned char*) data.mv_data;
+    unsigned char* charData = (unsigned char*) data.iov_base;
 
     if (charData[0] == 254) {
         uncompressedLength = ((uint32_t)charData[1] << 16) | ((uint32_t)charData[2] << 8) | (uint32_t)charData[3];
@@ -104,22 +104,22 @@ void Compression::decompress(MDB_val& data, bool &isValid) {
         return;
     }
     //TODO: For larger blocks with known encoding, it might make sense to allocate space for it and use an ExternalString
-    //fprintf(stdout, "compressed size %u uncompressedLength %u, first byte %u\n", data.mv_size, uncompressedLength, charData[compressionHeaderSize]);
+    //fprintf(stdout, "compressed size %u uncompressedLength %u, first byte %u\n", data.iov_len, uncompressedLength, charData[compressionHeaderSize]);
     if (uncompressedLength > decompressSize)
         expand(uncompressedLength);
     int written = LZ4_decompress_safe_usingDict(
         (char*)charData + compressionHeaderSize, decompressTarget,
-        data.mv_size - compressionHeaderSize, uncompressedLength,
+        data.iov_len - compressionHeaderSize, uncompressedLength,
         dictionary, decompressTarget - dictionary);
     //fprintf(stdout, "first uncompressed byte %X %X %X %X %X %X\n", uncompressedData[0], uncompressedData[1], uncompressedData[2], uncompressedData[3], uncompressedData[4], uncompressedData[5]);
     if (written < 0) {
-        //fprintf(stderr, "Failed to decompress data %u %u %u %u\n", charData[0], data.mv_size, compressionHeaderSize, uncompressedLength);
+        //fprintf(stderr, "Failed to decompress data %u %u %u %u\n", charData[0], data.iov_len, compressionHeaderSize, uncompressedLength);
         Nan::ThrowError("Failed to decompress data");
         isValid = false;
         return;
     }
-    data.mv_data = decompressTarget;
-    data.mv_size = uncompressedLength;
+    data.iov_base = decompressTarget;
+    data.iov_len = uncompressedLength;
     isValid = true;
 }
 
@@ -134,10 +134,10 @@ void Compression::expand(unsigned int size) {
     makeUnsafeBuffer();
 }
 
-argtokey_callback_t Compression::compress(MDB_val* value, argtokey_callback_t freeValue) {
-    size_t dataLength = value->mv_size;
-    char* data = (char*)value->mv_data;
-    if (value->mv_size < compressionThreshold && !(value->mv_size > 0 && ((uint8_t*)data)[0] >= 250))
+argtokey_callback_t Compression::compress(MDBX_val* value, argtokey_callback_t freeValue) {
+    size_t dataLength = value->iov_len;
+    char* data = (char*)value->iov_base;
+    if (value->iov_len < compressionThreshold && !(value->iov_len > 0 && ((uint8_t*)data)[0] >= 250))
         return freeValue; // don't compress if less than threshold (but we must compress if the first byte is the compression indicator)
     bool longSize = dataLength >= 0x1000000;
     int prefixSize = (longSize ? 8 : 4);
@@ -167,10 +167,10 @@ argtokey_callback_t Compression::compress(MDB_val* value, argtokey_callback_t fr
             compressedData[2] = (uint8_t)(dataLength >> 8u);
             compressedData[3] = (uint8_t)dataLength;
         }
-        value->mv_data = compressed;
-        value->mv_size = compressedSize + prefixSize;
-        return ([](MDB_val &value) -> void {
-            delete[] (char*)value.mv_data;
+        value->iov_base = compressed;
+        value->iov_len = compressedSize + prefixSize;
+        return ([](MDBX_val &value) -> void {
+            delete[] (char*)value.iov_base;
         });
     }
     else {

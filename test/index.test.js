@@ -12,7 +12,7 @@ let spawn = require('child_process').spawn;
 let { open, getLastVersion } = require('..');
 const { ArrayLikeIterable } = require('../util/ArrayLikeIterable')
 
-describe('lmdb-store', function() {
+describe('lmdbx-store', function() {
   let testDirPath = path.resolve(__dirname, './testdata-ls');
 
   // just to make a reasonable sized chunk of data...

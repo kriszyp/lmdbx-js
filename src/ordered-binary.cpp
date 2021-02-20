@@ -1,4 +1,4 @@
-#include "node-lmdb.h"
+#include "node-lmdbx.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -158,26 +158,26 @@ size_t valueToKey(const Local<Value> &jsKey, uint8_t* targetBytes, size_t remain
     }
 }
 
-bool valueToMDBKey(const Local<Value>& jsKey, MDB_val& mdbKey, KeySpace& keySpace) {
+bool valueToMDBXKey(const Local<Value>& jsKey, MDBX_val& mdbxKey, KeySpace& keySpace) {
     if (jsKey->IsArrayBufferView()) {
         // special case where we can directly use this
-        mdbKey.mv_data = node::Buffer::Data(jsKey);
-        mdbKey.mv_size = Local<ArrayBufferView>::Cast(jsKey)->ByteLength();
+        mdbxKey.iov_base = node::Buffer::Data(jsKey);
+        mdbxKey.iov_len = Local<ArrayBufferView>::Cast(jsKey)->ByteLength();
         return true;
     }
     uint8_t* targetBytes = keySpace.getTarget();
-    size_t size = mdbKey.mv_size = valueToKey(jsKey, targetBytes, 511, false, keySpace.fixedSize);
-    mdbKey.mv_data = targetBytes;
+    size_t size = mdbxKey.iov_len = valueToKey(jsKey, targetBytes, 511, false, keySpace.fixedSize);
+    mdbxKey.iov_base = targetBytes;
     if (!keySpace.fixedSize)
         keySpace.position += size;
     return size;
 }
 
-Local<Value> MDBKeyToValue(MDB_val &val) {
+Local<Value> MDBXKeyToValue(MDBX_val &val) {
     Local<Value> value;
     int consumed = 0;
-    uint8_t* keyBytes = (uint8_t*) val.mv_data;
-    int size = val.mv_size;
+    uint8_t* keyBytes = (uint8_t*) val.iov_base;
+    int size = val.iov_len;
     if (size < 1) {
         return Nan::Null();
     }
@@ -203,8 +203,8 @@ Local<Value> MDBKeyToValue(MDB_val &val) {
                 }
             } else {
                 return Nan::CopyBuffer(
-                    (char*)val.mv_data,
-                    val.mv_size
+                    (char*)val.iov_base,
+                    val.iov_len
                 ).ToLocalChecked();
             }
         } else {
@@ -226,14 +226,14 @@ Local<Value> MDBKeyToValue(MDB_val &val) {
             consumed = 9;
         }
     } else {
-        consumed = val.mv_size;
+        consumed = val.iov_len;
         bool isOneByte = true;
-        int8_t* position = ((int8_t*) val.mv_data);
+        int8_t* position = ((int8_t*) val.iov_base);
         int8_t* end = position + consumed;
         if (*position == 27) {
             position++; // skip string escape byte
             consumed--;
-            val.mv_data = (char*) val.mv_data + 1;
+            val.iov_base = (char*) val.iov_base + 1;
         }
         for (; position < end; position++) {
             if (*position < 1) { // by using signed chars, non-latin is negative and separators are less than 1
@@ -241,25 +241,25 @@ Local<Value> MDBKeyToValue(MDB_val &val) {
                 if (c < 0) {
                     isOneByte = false;
                 } else { // 0, separator
-                    consumed = position - ((int8_t*) val.mv_data);
+                    consumed = position - ((int8_t*) val.iov_base);
                     break;
                 }
             }
         }
         if (isOneByte)
-            value = v8::String::NewFromOneByte(Isolate::GetCurrent(), (uint8_t*) val.mv_data, v8::NewStringType::kNormal, consumed).ToLocalChecked();
+            value = v8::String::NewFromOneByte(Isolate::GetCurrent(), (uint8_t*) val.iov_base, v8::NewStringType::kNormal, consumed).ToLocalChecked();
         else
-            value = Nan::New<v8::String>((char*) val.mv_data, consumed).ToLocalChecked();
+            value = Nan::New<v8::String>((char*) val.iov_base, consumed).ToLocalChecked();
     }
     if (consumed < size) {
         Local<Value> nextValue;
         if (keyBytes[consumed] != 0 && keyBytes[consumed] != 30) {
             nextValue = Nan::New<v8::String>("Invalid separator byte").ToLocalChecked();
         } else {
-            MDB_val nextPart;
-            nextPart.mv_size = size - consumed - 1;
-            nextPart.mv_data = &keyBytes[consumed + 1];
-            nextValue = MDBKeyToValue(nextPart);
+            MDBX_val nextPart;
+            nextPart.iov_len = size - consumed - 1;
+            nextPart.iov_base = &keyBytes[consumed + 1];
+            nextValue = MDBXKeyToValue(nextPart);
         }
         v8::Local<v8::Array> resultsArray;
         Local<Context> context = Nan::GetCurrentContext();
@@ -285,10 +285,10 @@ NAN_METHOD(bufferToKeyValue) {
         Nan::ThrowError("Invalid key. Should be a Buffer.");
         return;
     }
-    MDB_val key;
-    key.mv_size = node::Buffer::Length(info[0]);
-    key.mv_data = node::Buffer::Data(info[0]);
-    info.GetReturnValue().Set(MDBKeyToValue(key));
+    MDBX_val key;
+    key.iov_len = node::Buffer::Length(info[0]);
+    key.iov_base = node::Buffer::Data(info[0]);
+    info.GetReturnValue().Set(MDBXKeyToValue(key));
 }
 NAN_METHOD(keyValueToBuffer) {
     uint8_t* targetBytes = fixedKeySpace->getTarget();

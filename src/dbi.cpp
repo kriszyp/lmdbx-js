@@ -1,5 +1,5 @@
 
-// This file is part of node-lmdb, the Node.js binding for lmdb
+// This file is part of node-lmdbx, the Node.js binding for lmdbx
 // Copyright (c) 2013-2017 Timur Kristóf
 // Copyright (c) 2021 Kristopher Tate
 // Licensed to you under the terms of the MIT license
@@ -22,7 +22,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-#include "node-lmdb.h"
+#include "node-lmdbx.h"
 #include <cstdio>
 
 using namespace v8;
@@ -30,10 +30,10 @@ using namespace node;
 
 void setFlagFromValue(int *flags, int flag, const char *name, bool defaultValue, Local<Object> options);
 
-DbiWrap::DbiWrap(MDB_env *env, MDB_dbi dbi) {
+DbiWrap::DbiWrap(MDBX_env *env, MDBX_dbi dbi) {
     this->env = env;
     this->dbi = dbi;
-    this->keyType = NodeLmdbKeyType::DefaultKey;
+    this->keyType = NodeLmdbxKeyType::DefaultKey;
     this->compression = nullptr;
     this->isOpen = false;
     this->ew = nullptr;
@@ -47,11 +47,11 @@ DbiWrap::~DbiWrap() {
     //     dbi1.close();
     //     txn.putString(dbi2, "world");
     // -----
-    // The above DbiWrap objects would both wrap the same MDB_dbi, and if closing the first one called mdb_dbi_close,
+    // The above DbiWrap objects would both wrap the same MDBX_dbi, and if closing the first one called mdbx_dbi_close,
     // that'd also render the second DbiWrap instance unusable.
     //
-    // For this reason, we will never call mdb_dbi_close
-    // NOTE: according to LMDB authors, it is perfectly fine if mdb_dbi_close is never called on an MDB_dbi
+    // For this reason, we will never call mdbx_dbi_close
+    // NOTE: according to LMDBX authors, it is perfectly fine if mdbx_dbi_close is never called on an MDBX_dbi
 
     if (this->ew) {
         this->ew->Unref();
@@ -72,14 +72,14 @@ void DbiWrap::setUnsafeBuffer(char* unsafePtr, const Persistent<Object> &unsafeB
 NAN_METHOD(DbiWrap::ctor) {
     Nan::HandleScope scope;
 
-    MDB_dbi dbi;
-    MDB_txn *txn;
+    MDBX_dbi dbi;
+    MDBX_txn *txn;
     int rc;
-    int flags = 0;
-    int txnFlags = 0;
+    MDBX_db_flags_t flags = MDBX_DB_DEFAULTS ;
+    MDBX_txn_flags_t txnFlags = MDBX_TXN_READWRITE;
     Local<String> name;
     bool nameIsNull = false;
-    NodeLmdbKeyType keyType = NodeLmdbKeyType::DefaultKey;
+    NodeLmdbxKeyType keyType = NodeLmdbxKeyType::DefaultKey;
     bool needsTransaction = true;
     bool isOpen = false;
     bool hasVersions = false;
@@ -94,26 +94,26 @@ NAN_METHOD(DbiWrap::ctor) {
 
         // Get flags from options
 
-        // NOTE: mdb_set_relfunc is not exposed because MDB_FIXEDMAP is "highly experimental"
-        // NOTE: mdb_set_relctx is not exposed because MDB_FIXEDMAP is "highly experimental"
-        setFlagFromValue(&flags, MDB_REVERSEKEY, "reverseKey", false, options);
-        setFlagFromValue(&flags, MDB_DUPSORT, "dupSort", false, options);
-        setFlagFromValue(&flags, MDB_DUPFIXED, "dupFixed", false, options);
-        setFlagFromValue(&flags, MDB_INTEGERDUP, "integerDup", false, options);
-        setFlagFromValue(&flags, MDB_REVERSEDUP, "reverseDup", false, options);
-        setFlagFromValue(&flags, MDB_CREATE, "create", false, options);
+        // NOTE: mdbx_set_relfunc is not exposed because MDBX_FIXEDMAP is "highly experimental"
+        // NOTE: mdbx_set_relctx is not exposed because MDBX_FIXEDMAP is "highly experimental"
+        setFlagFromValue(&(int)flags, (int)MDBX_REVERSEKEY, "reverseKey", false, options);
+        setFlagFromValue(&(int)flags, (int)MDBX_DUPSORT, "dupSort", false, options);
+        setFlagFromValue(&(int)flags, (int)MDBX_DUPFIXED, "dupFixed", false, options);
+        setFlagFromValue(&(int)flags, (int)MDBX_INTEGERDUP, "integerDup", false, options);
+        setFlagFromValue(&(int)flags, (int)MDBX_REVERSEDUP, "reverseDup", false, options);
+        setFlagFromValue(&(int)flags, (int)MDBX_CREATE, "create", false, options);
 
-        // TODO: wrap mdb_set_compare
-        // TODO: wrap mdb_set_dupsort
+        // TODO: wrap mdbx_set_compare
+        // TODO: wrap mdbx_set_dupsort
 
         keyType = keyTypeFromOptions(options);
-        if (keyType == NodeLmdbKeyType::InvalidKey) {
+        if (keyType == NodeLmdbxKeyType::InvalidKey) {
             // NOTE: Error has already been thrown inside keyTypeFromOptions
             return;
         }
         
-        if (keyType == NodeLmdbKeyType::Uint32Key) {
-            flags |= MDB_INTEGERKEY;
+        if (keyType == NodeLmdbxKeyType::Uint32Key) {
+            flags = MDBX_INTEGERKEY;
         }
         Local<Value> compressionOption = options->Get(Nan::GetCurrentContext(), Nan::New<String>("compression").ToLocalChecked()).ToLocalChecked();
         if (compressionOption->IsObject()) {
@@ -127,7 +127,7 @@ NAN_METHOD(DbiWrap::ctor) {
         #else
         if (create->IsBoolean() ? !create->BooleanValue(Nan::GetCurrentContext()).FromJust() : true) {
         #endif
-            txnFlags |= MDB_RDONLY;
+            txnFlags = MDBX_TXN_RDONLY;
         }
         Local<Value> hasVersionsLocal = options->Get(Nan::GetCurrentContext(), Nan::New<String>("useVersions").ToLocalChecked()).ToLocalChecked();
         hasVersions = hasVersionsLocal->IsTrue();
@@ -145,25 +145,25 @@ NAN_METHOD(DbiWrap::ctor) {
 
     if (needsTransaction) {
         // Open transaction
-        rc = mdb_txn_begin(ew->env, nullptr, txnFlags, &txn);
+        rc = mdbx_txn_begin(ew->env, nullptr, txnFlags, &txn);
         if (rc != 0) {
-            // No need to call mdb_txn_abort, because mdb_txn_begin already cleans up after itself
-            return throwLmdbError(rc);
+            // No need to call mdbx_txn_abort, because mdbx_txn_begin already cleans up after itself
+            return throwLmdbxError(rc);
         }
     }
 
     // Open database
     // NOTE: nullptr in place of the name means using the unnamed database.
     #if NODE_VERSION_AT_LEAST(12,0,0)
-    rc = mdb_dbi_open(txn, nameIsNull ? nullptr : *String::Utf8Value(Isolate::GetCurrent(), name), flags, &dbi);
+    rc = mdbx_dbi_open(txn, nameIsNull ? nullptr : *String::Utf8Value(Isolate::GetCurrent(), name), flags, &dbi);
     #else
-    rc = mdb_dbi_open(txn, nameIsNull ? nullptr : *String::Utf8Value(name), flags, &dbi);
+    rc = mdbx_dbi_open(txn, nameIsNull ? nullptr : *String::Utf8Value(name), flags, &dbi);
     #endif
     if (rc != 0) {
         if (needsTransaction) {
-            mdb_txn_abort(txn);
+            mdbx_txn_abort(txn);
         }
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
     else {
         isOpen = true;
@@ -171,9 +171,9 @@ NAN_METHOD(DbiWrap::ctor) {
 
     if (needsTransaction) {
         // Commit transaction
-        rc = mdb_txn_commit(txn);
+        rc = mdbx_txn_commit(txn);
         if (rc != 0) {
-            return throwLmdbError(rc);
+            return throwLmdbxError(rc);
         }
     }
 
@@ -200,7 +200,7 @@ NAN_METHOD(DbiWrap::close) {
 
     DbiWrap *dw = Nan::ObjectWrap::Unwrap<DbiWrap>(info.This());
     if (dw->isOpen) {
-        mdb_dbi_close(dw->env, dw->dbi);
+        mdbx_dbi_close(dw->env, dw->dbi);
         dw->isOpen = false;
         dw->ew->Unref();
         dw->ew = nullptr;
@@ -216,7 +216,7 @@ NAN_METHOD(DbiWrap::drop) {
     DbiWrap *dw = Nan::ObjectWrap::Unwrap<DbiWrap>(info.This());
     int del = 1;
     int rc;
-    MDB_txn *txn;
+    MDBX_txn *txn;
     bool needsTransaction = true;
     
     if (!dw->isOpen) {
@@ -246,26 +246,26 @@ NAN_METHOD(DbiWrap::drop) {
 
     if (needsTransaction) {
         // Begin transaction
-        rc = mdb_txn_begin(dw->env, nullptr, 0, &txn);
+        rc = mdbx_txn_begin(dw->env, nullptr, MDBX_TXN_READWRITE, &txn);
         if (rc != 0) {
-            return throwLmdbError(rc);
+            return throwLmdbxError(rc);
         }
     }
 
     // Drop database
-    rc = mdb_drop(txn, dw->dbi, del);
+    rc = mdbx_drop(txn, dw->dbi, del);
     if (rc != 0) {
         if (needsTransaction) {
-            mdb_txn_abort(txn);
+            mdbx_txn_abort(txn);
         }
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     }
 
     if (needsTransaction) {
         // Commit transaction
-        rc = mdb_txn_commit(txn);
+        rc = mdbx_txn_commit(txn);
         if (rc != 0) {
-            return throwLmdbError(rc);
+            return throwLmdbxError(rc);
         }
     }
     
@@ -288,8 +288,8 @@ NAN_METHOD(DbiWrap::stat) {
 
     TxnWrap *txn = Nan::ObjectWrap::Unwrap<TxnWrap>(Local<Object>::Cast(info[0]));
 
-    MDB_stat stat;
-    mdb_stat(txn->txn, dw->dbi, &stat);
+    MDBX_stat stat;
+    mdbx_dbi_stat(txn->txn, dw->dbi, &stat, sizeof(MDBX_stat));
 
     Local<Context> context = Nan::GetCurrentContext();
     Local<Object> obj = Nan::New<Object>();
