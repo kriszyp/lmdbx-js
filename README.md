@@ -1,10 +1,10 @@
-# lmdb-store
+# lmdbx-store
 [![license](https://img.shields.io/badge/license-MIT-brightgreen)](LICENSE)
-[![npm version](https://img.shields.io/npm/v/lmdb-store.svg?style=flat-square)](https://www.npmjs.org/package/lmdb-store)
+[![npm version](https://img.shields.io/npm/v/lmdbx-store.svg?style=flat-square)](https://www.npmjs.org/package/lmdbx-store)
 [![get](https://img.shields.io/badge/get-4.5%20MOPS-yellow)](README.md)
 [![put](https://img.shields.io/badge/put-1.7%20MOPS-yellow)](README.md)
 
-`lmdb-store` is an ultra-fast interface to LMDB; probably the fastest and most efficient NodeJS key-value/database interface that exists for full storage and retrieval of structured JS data (objects, arrays, etc.) in a true persisted, scalable, ACID-compliant, database. It provides a simple interface for interacting with LMDB, as a key-value store, that makes it easy to properly leverage the power, crash-proof design, and efficiency of LMDB using intuitive JavaScript, and is designed to scale across multiple processes or threads. `lmdb-store` offers several key features that make it idiomatic, highly performant, and easy to use LMDB efficiently:
+`lmdbx-store` is an ultra-fast interface to libmdbx, which is derived from LMDB. This package provides an extremly fastest and most efficient NodeJS key-value/database interface that exists for full storage and retrieval of structured JS data (objects, arrays, etc.) in a true persisted, scalable, ACID-compliant, database. It provides a simple interface for interacting with libmdbx, as a key-value store, that makes it easy to properly leverage the power, crash-proof design, and efficiency of libmdbx using intuitive JavaScript, and is designed to scale across multiple processes or threads. `lmdbx-store` offers several key features that make it idiomatic, highly performant, and easy to use libmdbx efficiently:
 * High-performance translation of JS values and data structures to/from binary key/value data
 * Queueing asynchronous off-thread write operations with promise-based API
 * Automated database size handling
@@ -14,30 +14,30 @@
 * Optional native off-main-thread compression with high-performance LZ4 compression
 * And ridiculously fast and efficient:
 
-Benchmarking on Node 14.9, with 3.4Ghz i7-4770 Windows, a get operation, using JS numbers as a key, retrieving data from the database (random access), and decoding the data into a structured object with 10 properties (using default [MessagePack encoding](https://github.com/kriszyp/msgpackr)), can be done in less than one microsecond, or a little over a 1,200,000/sec on a single thread. This is almost twice as fast as a single native `JSON.parse` call with the same object without any DB interaction! LMDB scales effortlessly across multiple processes or threads; over 4,500,000 operations/sec on the same 4/8 core computer by running across multiple threads. By running writes on a separate transactional thread, these are extremely fast as well. With encoding the same objects, full encoding and writes can be performed at about 500,000 puts/second or 1,700,000 puts/second on multiple threads.
+Benchmarking on Node 14.9, with 3.4Ghz i7-4770 Windows, a get operation, using JS numbers as a key, retrieving data from the database (random access), and decoding the data into a structured object with 10 properties (using default [MessagePack encoding](https://github.com/kriszyp/msgpackr)), can be done in less than one microsecond, or a little over a 1,200,000/sec on a single thread. This is almost twice as fast as a single native `JSON.parse` call with the same object without any DB interaction! libmdbx scales effortlessly across multiple processes or threads; over 4,500,000 operations/sec on the same 4/8 core computer by running across multiple threads. By running writes on a separate transactional thread, these are extremely fast as well. With encoding the same objects, full encoding and writes can be performed at about 500,000 puts/second or 1,700,000 puts/second on multiple threads.
 
 ## Design
 
-`lmdb-store` handles translation of JavaScript values, primitives, arrays, and objects, to and from the binary storage of LMDB keys and values with highly optimized code using native C++ code for remarkable performance. It supports multiple types of JS values for keys and values, making it easy to use idiomatic JS for storing and retrieving data.
+`lmdbx-store` handles translation of JavaScript values, primitives, arrays, and objects, to and from the binary storage of libmdbx keys and values with highly optimized code using native C++ code for remarkable performance. It supports multiple types of JS values for keys and values, making it easy to use idiomatic JS for storing and retrieving data.
 
-`lmdb-store` is designed for synchronous reads, and asynchronous writes. In idiomatic NodeJS code, I/O operations are performed asynchronously. `lmdb-store` observes this design pattern; because LMDB is a memory-mapped database, read operations do not use any I/O (other than the slight possibility of a page fault), and can almost always be performed faster than Node's event queue callbacks can even execute, and it is easier to write code for instant synchronous values from reads. On the otherhand, in default mode with sync'ed/flushed transactions, write operations do involve I/O, and furthermore can achieve vastly higher throughput by batching operations. The entire transaction of batch operation are performed in a separate thread. Consequently, `lmdb-store` is designed for writes to go through this asynchronous batching process and return a simple promise that resolves once the write is completed and flushed to disk.
+`lmdbx-store` is designed for synchronous reads, and asynchronous writes. In idiomatic NodeJS code, I/O operations are performed asynchronously. `lmdbx-store` observes this design pattern; because libmdbx is a memory-mapped database, read operations do not use any I/O (other than the slight possibility of a page fault), and can almost always be performed faster than Node's event queue callbacks can even execute, and it is easier to write code for instant synchronous values from reads. On the otherhand, in default mode with sync'ed/flushed transactions, write operations do involve I/O, and furthermore can achieve vastly higher throughput by batching operations. The entire transaction of batch operation are performed in a separate thread. Consequently, `lmdbx-store` is designed for writes to go through this asynchronous batching process and return a simple promise that resolves once the write is completed and flushed to disk.
 
-LMDB supports multiple modes of transactions, including disabling of file sync'ing (noSync), which makes transaction commits much faster. We _highly_ discourage turning off sync'ing as it leaves the database prone to data corruption. With the default sync'ing enabled, LMDB has a crash-proof design; a machine can be turned off at any point, and data can only be corrupted if the written data is actually changed or tampered. This does increase latency of transactions (although not necessarily less efficient). However, by batching writes, when a database is under load, slower transactions enable more writes per transaction, and lmdb-store is able to drive LMDB to achieve the same levels of throughput with safe sync'ed transactions as without, while still preserving the durability/safety of sync'ed transactions.
+libmdbx supports multiple modes of transactions, including disabling of file sync'ing (noSync), which makes transaction commits much faster. We _highly_ discourage turning off sync'ing as it leaves the database prone to data corruption. With the default sync'ing enabled, libmdbx has a crash-proof design; a machine can be turned off at any point, and data can only be corrupted if the written data is actually changed or tampered. This does increase latency of transactions (although not necessarily less efficient). However, by batching writes, when a database is under load, slower transactions enable more writes per transaction, and lmdbx-store is able to drive libmdbx to achieve the same levels of throughput with safe sync'ed transactions as without, while still preserving the durability/safety of sync'ed transactions.
 
-`lmdb-store` supports and encourages the use of conditional writes; this allows for atomic operations that are dependendent on previously read data, and most transactional types of operations can be written with an optimistic-locking based, atomic-conditional-write pattern. This allows `lmdb-store` to scale to handle concurrent execution across many processes or threads while maintaining data integrity.
+`lmdbx-store` supports and encourages the use of conditional writes; this allows for atomic operations that are dependendent on previously read data, and most transactional types of operations can be written with an optimistic-locking based, atomic-conditional-write pattern. This allows `lmdbx-store` to scale to handle concurrent execution across many processes or threads while maintaining data integrity.
 
-When an `lmdb-store` is created, an LMDB environment/database is created, and starts with a default DB size of 1MB. LMDB itself uses a fixed size, but `lmdb-store` detects whenever the database goes beyond the current size, and automatically increases the size of DB, and re-executes the write operations after resizing. With this, you do not have to make any estimates of database size, the databases automatically grow as needed (as you would expect from a database!)
+When an `lmdbx-store` is created, an libmdbx environment/database is created, and starts with a default DB size of 1MB. libmdbx itself uses a fixed size, but `lmdbx-store` detects whenever the database goes beyond the current size, and automatically increases the size of DB, and re-executes the write operations after resizing. With this, you do not have to make any estimates of database size, the databases automatically grow as needed (as you would expect from a database!)
 
-`lmdb-store` provides optional compression using LZ4 that works in conjunction with the asynchronous writes by performing the compression in the same thread (off the main thread) that performs the writes in a transaction. LZ4 is extremely fast, and decompression can be performed at roughly 5GB/s, so excellent storage efficiency can be achieved with almost negligible performance impact.
+`lmdbx-store` provides optional compression using LZ4 that works in conjunction with the asynchronous writes by performing the compression in the same thread (off the main thread) that performs the writes in a transaction. LZ4 is extremely fast, and decompression can be performed at roughly 5GB/s, so excellent storage efficiency can be achieved with almost negligible performance impact.
 
-`lmdb-store` is built on the excellent [node-lmdb](https://github.com/Venemo/node-lmdb) package.
+`lmdbx-store` is built on the excellent [node-lmdb](https://github.com/Venemo/node-lmdb) package.
 
 ## Usage
-An lmdb-store instances is created with by using `open` export from the main module:
+An lmdbx-store instances is created with by using `open` export from the main module:
 ```
-const { open } = require('lmdb-store');
+const { open } = require('lmdbx-store');
 // or
-// import { open } from 'lmdb-store';
+// import { open } from 'lmdbx-store';
 let myStore = open({
 	path: 'my-store',
 	// any options go here, we can turn on compression like this:
@@ -52,10 +52,10 @@ Once you have created a store, you can store and retrieve values using keys:
 
 ## Upgrade Note
 
-LMDB 1.0RC (reported as 0.9.90) has upgraded their database format (incompatible with LMDB 0.9). lmdb-store 0.8.x uses this new database format and includes an automatic upgrade script that will upgrade an existing legacy database to the new format. To use the automatic upgrade script, you must install the [lmdb-store-0.9](https://www.npmjs.com/package/lmdb-store-0.9) package.
+libmdbx 1.0RC (reported as 0.9.90) has upgraded their database format (incompatible with libmdbx 0.9). lmdbx-store 0.8.x uses this new database format and includes an automatic upgrade script that will upgrade an existing legacy database to the new format. To use the automatic upgrade script, you must install the [lmdbx-store-0.9](https://www.npmjs.com/package/lmdbx-store-0.9) package.
 
 ### Keys
-When using the various APIs, keys can be any JS primitive (string, number, boolean, symbol), an array of primitives, or a Buffer. These primitives are translated to binary keys used by LMDB in such a way that consistent ordering is preserved. Numbers are ordered naturally, which come before strings, which are ordered lexically. The keys are stored with type information preserved. The `getRange`operations that return a set of entries will return entries with the original JS primitive values for the keys. If arrays are used as keys, they are ordering by first value in the array, with each subsequent element being a tie-breaker. Numbers are stored as doubles, with reversal of sign bit for proper ordering plus type information, so any JS number can be used as a key. For example, here are the order of some different keys:
+When using the various APIs, keys can be any JS primitive (string, number, boolean, symbol), an array of primitives, or a Buffer. These primitives are translated to binary keys used by libmdbx in such a way that consistent ordering is preserved. Numbers are ordered naturally, which come before strings, which are ordered lexically. The keys are stored with type information preserved. The `getRange`operations that return a set of entries will return entries with the original JS primitive values for the keys. If arrays are used as keys, they are ordering by first value in the array, with each subsequent element being a tie-breaker. Numbers are stored as doubles, with reversal of sign bit for proper ordering plus type information, so any JS number can be used as a key. For example, here are the order of some different keys:
 ```
 Symbol.for('even symbols')
 -10 // negative supported
@@ -72,7 +72,7 @@ Symbol.for('even symbols')
 You can override the default encoding of keys, and cause keys to be returned as node buffers using the `keyIsBuffer` database option (generally slower).
 
 ### Values
-You can store a wide variety of JavaScript values and data structures in lmdb-store, including objects (with arbitray complexity), arrays, buffers, strings, numbers, etc. in your database. Values are stored and retrieved according the database encoding, which can be set using the `encoding` property on the database options. By default, data is stored using MessagePack, but there are four supported encodings:
+You can store a wide variety of JavaScript values and data structures in lmdbx-store, including objects (with arbitray complexity), arrays, buffers, strings, numbers, etc. in your database. Values are stored and retrieved according the database encoding, which can be set using the `encoding` property on the database options. By default, data is stored using MessagePack, but there are four supported encodings:
 
 * `msgpack` (default) - All values are stored by serializing the value as MessagePack (using the [msgpackr](https://github.com/kriszyp/msgpackr) package). Values are decoded and parsed on retrieval, so `get` and `getRange` will return the object, array, or other value that you have stored. The msgpackr package is extremely fast (faster than native JSON), and provides the most flexibility in storing different value types. See the Shared Structures section for how to achieve maximum efficiency with this.
 * `cbor` - This specifies all values use the CBOR format, which requires that the [cbor-x](https://github.com/kriszyp/cbor-x) package be installed. This package is based on [msgpackr](https://github.com/kriszyp/msgpackr) and supports all the same options.
@@ -89,7 +89,7 @@ This will retrieve the value at the specified key. The `key` must be a JS value/
 This will retrieve the the entry at the specified key. The `key` must be a JS value/primitive as described above, and the return value will be the stored data (dependent on the encoding), or `undefined` if the entry does not exist. An entry is object with a `value` property for the value in the database, and a `version` property for the version number of the entry in the database (if `useVersions` is enabled for the database).
 
 ### `store.put(key, value, version?: number, ifVersion?: number): Promise<boolean>`
-This will store the provided value/data at the specified key. If the database is using versioning (see options below), the `version` parameter will be used to set the version number of the entry. If the `ifVersion` parameter is set, the put will only occur if the existing entry at the provided key has the version specified by `ifVersion` at the instance the commit occurs (LMDB commits are atomic by default). If the `ifVersion` parameter is not set, the put will occur regardless of the previous value.
+This will store the provided value/data at the specified key. If the database is using versioning (see options below), the `version` parameter will be used to set the version number of the entry. If the `ifVersion` parameter is set, the put will only occur if the existing entry at the provided key has the version specified by `ifVersion` at the instance the commit occurs (libmdbx commits are atomic by default). If the `ifVersion` parameter is not set, the put will occur regardless of the previous value.
 
 This operation will be enqueued to be written in a batch transaction. Any other operations that occur within a certain timeframe (until next event after I/O by default) will also occur in the same transaction. This will return a promise for the completion of the put. The promise will resolve once the transaction has finished committing. The resolved value of the promise will be `true` if the `put` was successful, and `false` if the put did not occur due to the `ifVersion` not matching at the time of the commit.
 
@@ -161,9 +161,9 @@ You can optionally provide a second argument with the same `options` that `getRa
 This behaves like `getRange`, but only returns the keys. If this is duplicate key database, each key is only returned once (even if it has multiple values/entries).
 
 ### `store.openDB(database: string|{name:string,...})`
-LMDB supports multiple databases per environment (an environment is a single memory-mapped file). When you initialize an LMDB store with `open`, the store uses the default root database. However, you can use multiple databases per environment/file and instantiate a store for each one. If you are going to be opening many databases, make sure you set the `maxDbs` (it defaults to 12). For example, we can open multiple stores for a single environment:
+libmdbx supports multiple databases per environment (an environment is a single memory-mapped file). When you initialize an libmdbx store with `open`, the store uses the default root database. However, you can use multiple databases per environment/file and instantiate a store for each one. If you are going to be opening many databases, make sure you set the `maxDbs` (it defaults to 12). For example, we can open multiple stores for a single environment:
 ```
-const { open } = require('lmdb-store');
+const { open } = require('lmdbx-store');
 let rootStore = open('all-my-data');
 let usersStore = myStore.openDB('users');
 let groupsStore = myStore.openDB('groups');
@@ -180,10 +180,10 @@ Both these puts will be batched and committed in the same transaction in the nex
 This returns the version number of the last entry that was retrieved with `get` (assuming it was a versioned database). If you are using a database with `cache` enabled, use `getEntry` instead.
 
 ### close(): void
-This will close the current store. This closes the underlying LMDB database, and if this is the root database (opened with `open` as opposed to `store.openDB`), it will close the environment (and child stores will no longer be able to interact with the database).
+This will close the current store. This closes the underlying libmdbx database, and if this is the root database (opened with `open` as opposed to `store.openDB`), it will close the environment (and child stores will no longer be able to interact with the database).
 
 ## Concurrency and Versioning
-LMDB and lmdb-store are designed for high concurrency, and we recommend using multiple processes to achieve concurrency with lmdb-store (processes are more robust than threads, and thread's advantage of shared memory is minimal with separate NodeJS isolates, and you still get shared memory access with processes when using LMDB). Versioning is the preferred method for achieving atomicity with data updates with concurrency. A version can be stored with an entry, and later the data can be updated, conditional on the version being the expected version. This provides a robust mechanism for concurrent data updates even with multiple processes accessing the same database. To enable versioning, make sure to set the `useVersions` option when opening the database:
+libmdbx and lmdbx-store are designed for high concurrency, and we recommend using multiple processes to achieve concurrency with lmdbx-store (processes are more robust than threads, and thread's advantage of shared memory is minimal with separate NodeJS isolates, and you still get shared memory access with processes when using libmdbx). Versioning is the preferred method for achieving atomicity with data updates with concurrency. A version can be stored with an entry, and later the data can be updated, conditional on the version being the expected version. This provides a robust mechanism for concurrent data updates even with multiple processes accessing the same database. To enable versioning, make sure to set the `useVersions` option when opening the database:
 ```
 let myStore = open('my-store', { useVersions: true })
 ```
@@ -204,18 +204,18 @@ myStore.ifVersion('key1', 4, () => {
 ```
 
 ## Shared Structures
-Shared structures are mechanism for storing the structural information about objects stored in database in dedicated entry, outside of individual entries, for reuse across all of the data in database, for much more efficient storage and faster retrieval of data when storing objects that have the same or similar structures (note that this is only available using the default MessagePack or CBOR encoding, using the msgpackr or cbor-x package). This is highly recommended when storing structured objects with similiar object structures (including inside of array) in lmdb-store. When enabled, when data is stored, any structural information (the set of property names) is automatically generated and stored in separate entry to be reused for storing and retrieving all data for the database. To enable this feature, simply specify the key where lmdb-store can store the shared structures. You can use a symbol as a metadata key, as symbols are outside of the range of the standard JS primitive values:
+Shared structures are mechanism for storing the structural information about objects stored in database in dedicated entry, outside of individual entries, for reuse across all of the data in database, for much more efficient storage and faster retrieval of data when storing objects that have the same or similar structures (note that this is only available using the default MessagePack or CBOR encoding, using the msgpackr or cbor-x package). This is highly recommended when storing structured objects with similiar object structures (including inside of array) in lmdbx-store. When enabled, when data is stored, any structural information (the set of property names) is automatically generated and stored in separate entry to be reused for storing and retrieving all data for the database. To enable this feature, simply specify the key where lmdbx-store can store the shared structures. You can use a symbol as a metadata key, as symbols are outside of the range of the standard JS primitive values:
 ```
 let myStore = open('my-store', {
 	sharedStructuresKey: Symbol.for('structures')
 })
 ```
-Once shared structures has been enabled, you can store JavaScript objects just as you would normally would, and lmdb-store will automatically generate, increment, and save the structural information in the provided key to improve storage efficiency and performance. You never need to directly access this key, just be aware that that entry is being used by lmdb-store.
+Once shared structures has been enabled, you can store JavaScript objects just as you would normally would, and lmdbx-store will automatically generate, increment, and save the structural information in the provided key to improve storage efficiency and performance. You never need to directly access this key, just be aware that that entry is being used by lmdbx-store.
 
 ## Compression
-lmdb-store can optionally use off-thread LZ4 compression as part of the asynchronous writes to enable efficient compression with virtually no overhead to the main thread. LZ4 decompression (in `get` and `getRange` calls) is extremely fast and generally has little impact on performance. Compression is turned off by default, but can be turned on by setting the `compression` property when opening a database. The value of compression can be `true` or an object with compression settings, including properties:
+lmdbx-store can optionally use off-thread LZ4 compression as part of the asynchronous writes to enable efficient compression with virtually no overhead to the main thread. LZ4 decompression (in `get` and `getRange` calls) is extremely fast and generally has little impact on performance. Compression is turned off by default, but can be turned on by setting the `compression` property when opening a database. The value of compression can be `true` or an object with compression settings, including properties:
 * `threshold` - Only entries that are larger than this value (in bytes) will be compressed. This defaults to 1000 (if compression is enabled)
-* `dictionary` - This can be buffer to use as a shared dictionary. This is defaults to a shared dictionary in lmdb-store that helps with compressing JSON and English words in small entries. [Zstandard](https://facebook.github.io/zstd/#small-data) provides utilities for [creating your own optimized shared dictionary](https://github.com/lz4/lz4/releases/tag/v1.8.1.2).
+* `dictionary` - This can be buffer to use as a shared dictionary. This is defaults to a shared dictionary in lmdbx-store that helps with compressing JSON and English words in small entries. [Zstandard](https://facebook.github.io/zstd/#small-data) provides utilities for [creating your own optimized shared dictionary](https://github.com/lz4/lz4/releases/tag/v1.8.1.2).
 For example:
 ```
 let myStore = open('my-store', {
@@ -228,7 +228,7 @@ let myStore = open('my-store', {
 Compression is recommended for large databases that may be larger than available RAM, to improve caching and reduce page faults.
 
 ## Caching
-lmdb-store supports caching of entries from stores, and uses a [LRU/LFU (LRFU) and weak-referencing caching mechanism](https://github.com/kriszyp/weak-lru-cache) for highly optimized caching and object tracking. There are several key potential benefits to using caching, including performance, key correlation with object identity, and immediate/synchronous access to saved data. Enabling caching will cache `get`s and `put`s, which can make frequent `get`s much faster. Caching is enabled by providing a truthy value for the `cache` property on the store `options`.
+lmdbx-store supports caching of entries from stores, and uses a [LRU/LFU (LRFU) and weak-referencing caching mechanism](https://github.com/kriszyp/weak-lru-cache) for highly optimized caching and object tracking. There are several key potential benefits to using caching, including performance, key correlation with object identity, and immediate/synchronous access to saved data. Enabling caching will cache `get`s and `put`s, which can make frequent `get`s much faster. Caching is enabled by providing a truthy value for the `cache` property on the store `options`.
 
 The weak-referencing mechanism works in harmony with JS garbage collection to allow objects to be cached without preventing GC, and retrieved from the cache until they have actually been collected from memory, making more efficient use of memory. This also can provide a guarantee of object identity correlation with keys: as long as retrieved object is in memory, a `get` will always return the existing object, and `get` never will return two copies of the same object (for the same key). The LRFU caching mechanism is scan-resistant, tracking frequency of usage as well as recency.
 
@@ -238,7 +238,7 @@ store.put('hi', 'there');
 store.get('hi'); // can immediately access value without having to await the promise
 ```
 
-While caching can improve performance, LMDB itself is extremely fast, and for small objects with sporadic access, caching may not improve performance. Caching tends to provide the most performance benefits for larger objects that may have more significant deserialization costs. Caching does not apply to `getRange` queries. Also note that this requires Node 14.10 or higher (or Node v13.0 with `--harmony-weak-ref` flag).
+While caching can improve performance, libmdbx itself is extremely fast, and for small objects with sporadic access, caching may not improve performance. Caching tends to provide the most performance benefits for larger objects that may have more significant deserialization costs. Caching does not apply to `getRange` queries. Also note that this requires Node 14.10 or higher (or Node v13.0 with `--harmony-weak-ref` flag).
 
 If you are using caching with a database that has versions enabled, you should use the `getEntry` method to get the `value` and `version`, as `getLastVersion` will not be reliable (only returns the version when the data is accessed from the database).
 
@@ -267,16 +267,16 @@ The following additional option properties are only available when creating the 
 * `immediateBatchThreshold` - This parameter defines a limit on the number of batched bytes in write operations that can be pending for a transaction before ldmb-store will schedule the asynchronous commit for the immediate next even turn (with setImmediate). The default is 10,000,000 (bytes).
 * `syncBatchThreshold` - This parameter defines a limit on the number of batched bytes in write operations that can be pending for a transaction before ldmb-store will be force an immediate synchronous commit of all pending batched data for the store. This provides a safeguard against too much data being enqueued for asynchronous commit, and excessive memory usage, that can sometimes occur for a large number of continuous `put` calls without waiting for an event turn for the timer to execute. The default is 200,000,000 (bytes).
 
-#### LMDB Flags
-In addition, the following options map to LMDB's env flags, <a href="http://www.lmdb.tech/doc/group__mdb.html">described here</a> (only `noMemInit` is recommended, but others are available for boosting performance):
+#### libmdbx Flags
+In addition, the following options map to libmdbx's env flags, <a href="http://www.lmdb.tech/doc/group__mdb.html">described here</a> (only `noMemInit` is recommended, but others are available for boosting performance):
 * `noMemInit` - This provides a small performance boost (when not using useWritemap) for writes, by skipping zero'ing out malloc'ed data, but can leave application data in unused portions of the database.
 * `noReadAhead` - This disables read-ahead caching. Turning it off may help random read performance when the DB is larger than RAM and system RAM is full. However, this is not supported by all OSes, including Windows.
 * `useWritemap` - Use writemaps, this improves performance by reducing malloc calls, but can increase risk of a stray pointer corrupting data.
 * `noSubdir` - Treat `path` as a filename instead of directory (this is the default if the path appears to end with an extension and has '.' in it)
-* `noSync` - Doesn't sync the data to disk. We highly discourage this flag, since it can result in data corruption and lmdb-store mitigates performance issues associated with disk syncs by batching.
+* `noSync` - Doesn't sync the data to disk. We highly discourage this flag, since it can result in data corruption and lmdbx-store mitigates performance issues associated with disk syncs by batching.
 * `noMetaSync` - This isn't as dangerous as `noSync`, but doesn't improve performance much either.
 * `readOnly` - Self-descriptive.
-* `mapAsync` - Not recommended, lmdb-store provides the means to ensure commits are performed in a separate thread (asyncronous to JS), and this prevents accurate notification of when flushes finish.
+* `mapAsync` - Not recommended, lmdbx-store provides the means to ensure commits are performed in a separate thread (asyncronous to JS), and this prevents accurate notification of when flushes finish.
 
 #### Serialization options
 If you are using the default encoding of `'msgpack'`, the [msgpackr](https://github.com/kriszyp/msgpackr) package is used for serialization and deserialization. You can provide store options that are passed to msgpackr, as well. For example, these options can be potentially useful:
@@ -287,25 +287,18 @@ You can also use the CBOR format by specifying the encoding of `'cbor'` and inst
 
 ## Events
 
-The `lmdb-store` instance is an <a href="https://nodejs.org/dist/latest-v11.x/docs/api/events.html#events_class_eventemitter">EventEmitter</a>, allowing application to listen to database events. There is just one event right now:
+The `lmdbx-store` instance is an <a href="https://nodejs.org/dist/latest-v11.x/docs/api/events.html#events_class_eventemitter">EventEmitter</a>, allowing application to listen to database events. There is just one event right now:
 
 `beforecommit` - This event is fired before a batched operation begins to start a transaction to write all queued writes to the database. The callback function can perform additional (asynchronous) writes (`put` and `remove`) and they will be included in the transaction about to be performed (this can be useful for updating a global version stamp based on all previous writes, for example).
 
-##### Build Options
-A few LMDB options are available at build time, and can be specified with options with `npm install` (which can be specified in your package.json install script):
-`npm install --use_vl32=true`: This will enable LMDB's VL32 mode, when running on 32-bit architecture, which adds support for large (multi-GB) databases on 32-bit architecture.
-`npm install --use_robust=true`: This will enable LMDB's MDB_USE_ROBUST option, which uses robust semaphores/mutexes so that if you are using multiple processes, and one process dies in the middle of transaction, the OS will cleanup the semaphore/mutex, aborting the transaction and allowing other processes to run without hanging. There is a slight performance overhead, but this is recommended if you will be using multiple processes.
-
-On MacOS, there is a default limit of 10 robust locked semaphores, which imposes a limit on the number of open write transactions (if you have over 10 db environments with a write transaction). If you need more concurrent write transactions, you can increase your  maximum undoable semaphore count by setting kern.sysv.semmnu on your local computer. Or you can build with POSIX semaphores, using `npm install --use_posix_semaphores=true`. However POSIX semaphores are not robust semaphores, which means that if you are running multiple processes and one crashes in the midst of transaction, it may block other processes from starting a transaction on that environment. Or try to minimize overlapping transactions and/or reduce the number of db environments (and use more databases within each environment).
-
 ## License
 
-`lmdb-store` is licensed under the terms of the MIT license.
+`lmdbx-store` is licensed under the terms of the MIT license.
 
 ## Related Projects
 
-lmdb-store is built on top of [node-lmdb](https://github.com/Venemo/node-lmdb)
-lmdb-store uses msgpackr for the default serialization of data [msgpackr](https://github.com/kriszyp/msgpackr)
-cobase is built on top of lmdb-store: [cobase](https://github.com/DoctorEvidence/cobase)
+lmdbx-store is built on top of [node-lmdb](https://github.com/Venemo/node-lmdb)
+lmdbx-store uses msgpackr for the default serialization of data [msgpackr](https://github.com/kriszyp/msgpackr)
+cobase is built on top of lmdbx-store: [cobase](https://github.com/DoctorEvidence/cobase)
 
 <a href="https://dev.doctorevidence.com/"><img src="./assets/powers-dre.png" width="203"/></a>
