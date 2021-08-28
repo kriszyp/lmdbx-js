@@ -13,6 +13,7 @@
         "dependencies/libmdbx/src/core.c",
         "dependencies/libmdbx/src/lck-windows.c",
         "dependencies/libmdbx/src/osal.c",
+        "dependencies/libmdbx/src/lck-posix.c",
         "dependencies/libmdbx/src/mdbx.c++",
         "dependencies/lz4/lib/lz4.h",
         "dependencies/lz4/lib/lz4.c",
