@@ -428,15 +428,15 @@ NAN_METHOD(EnvWrap::open) {
 
     // NOTE: MDBX_FIXEDMAP is not exposed here since it is "highly experimental" + it is irrelevant for this use case
     // NOTE: MDBX_NOTLS is not exposed here because it is irrelevant for this use case, as node will run all this on a single thread anyway
-    setFlagFromValue(&(int)flags, (int)MDBX_NOSUBDIR, "noSubdir", false, options);
-    setFlagFromValue(&(int)flags, (int)MDBX_RDONLY, "readOnly", false, options);
-    setFlagFromValue(&(int)flags, (int)MDBX_WRITEMAP, "useWritemap", false, options);
+    setFlagFromValue((int*) &flags, (int)MDBX_NOSUBDIR, "noSubdir", false, options);
+    setFlagFromValue((int*) &flags, (int)MDBX_RDONLY, "readOnly", false, options);
+    setFlagFromValue((int*) &flags, (int)MDBX_WRITEMAP, "useWritemap", false, options);
     //setFlagFromValue(&flags, MDBX_PREVSNAPSHOT, "usePreviousSnapshot", false, options);
-    setFlagFromValue(&(int)flags, (int)MDBX_NOMEMINIT , "noMemInit", false, options);
-    setFlagFromValue(&(int)flags, (int)MDBX_NORDAHEAD , "noReadAhead", false, options);
-    setFlagFromValue(&(int)flags, (int)MDBX_NOMETASYNC, "noMetaSync", false, options);
-    setFlagFromValue(&(int)flags, (int)MDBX_SAFE_NOSYNC, "noSync", false, options);
-    setFlagFromValue(&(int)flags, (int)MDBX_MAPASYNC, "mapAsync", false, options);
+    setFlagFromValue((int*) &flags, (int)MDBX_NOMEMINIT , "noMemInit", false, options);
+    setFlagFromValue((int*) &flags, (int)MDBX_NORDAHEAD , "noReadAhead", false, options);
+    setFlagFromValue((int*) &flags, (int)MDBX_NOMETASYNC, "noMetaSync", false, options);
+    setFlagFromValue((int*) &flags, (int)MDBX_SAFE_NOSYNC, "noSync", false, options);
+    setFlagFromValue((int*) &flags, (int)MDBX_MAPASYNC, "mapAsync", false, options);
     //setFlagFromValue(&flags, MDBX_NOLOCK, "unsafeNoLock", false, options);*/
 
     /*if ((int) flags & (int) MDBX_NOLOCK) {
