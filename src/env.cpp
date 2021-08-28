@@ -748,10 +748,10 @@ NAN_METHOD(EnvWrap::batchWrite) {
 
     if (!info[2]->IsNull() && !info[2]->IsUndefined() && info[2]->IsObject() && !info[2]->IsFunction()) {
         Local<Object> optionsObject = Local<Object>::Cast(options);
-        setFlagFromValue(&(int) putFlags, (int) MDBX_NODUPDATA, "noDupData", false, optionsObject);
-        setFlagFromValue(&(int) putFlags, (int) MDBX_NOOVERWRITE, "noOverwrite", false, optionsObject);
-        setFlagFromValue(&(int) putFlags, (int) MDBX_APPEND, "append", false, optionsObject);
-        setFlagFromValue(&(int) putFlags, (int) MDBX_APPENDDUP, "appendDup", false, optionsObject);
+        setFlagFromValue((int*) &putFlags, (int) MDBX_NODUPDATA, "noDupData", false, optionsObject);
+        setFlagFromValue((int*) &putFlags, (int) MDBX_NOOVERWRITE, "noOverwrite", false, optionsObject);
+        setFlagFromValue((int*) &putFlags, (int) MDBX_APPEND, "append", false, optionsObject);
+        setFlagFromValue((int*) &putFlags, (int) MDBX_APPENDDUP, "appendDup", false, optionsObject);
         callback = new Nan::Callback(
             Local<v8::Function>::Cast(info[3])
         );
