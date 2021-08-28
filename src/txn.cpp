@@ -69,7 +69,7 @@ NAN_METHOD(TxnWrap::ctor) {
 
         // Get flags from options
 
-        setFlagFromValue(&(int)flags, (int)MDBX_TXN_RDONLY, "readOnly", false, options);
+        setFlagFromValue((int*) &flags, (int)MDBX_TXN_RDONLY, "readOnly", false, options);
     } else {
     fprintf(stderr, "Beginning transaction\n");
         
@@ -267,10 +267,10 @@ Nan::NAN_METHOD_RETURN_TYPE TxnWrap::putCommon(Nan::NAN_METHOD_ARGS_TYPE info, v
 
     if (info[3]->IsObject()) {
         auto options = Local<Object>::Cast(info[3]);
-        setFlagFromValue(&(int)flags, (int)MDBX_NODUPDATA, "noDupData", false, options);
-        setFlagFromValue(&(int)flags, (int)MDBX_NOOVERWRITE, "noOverwrite", false, options);
-        setFlagFromValue(&(int)flags, (int)MDBX_APPEND, "append", false, options);
-        setFlagFromValue(&(int)flags, (int)MDBX_APPENDDUP, "appendDup", false, options);
+        setFlagFromValue((int*) &flags, (int)MDBX_NODUPDATA, "noDupData", false, options);
+        setFlagFromValue((int*) &flags, (int)MDBX_NOOVERWRITE, "noOverwrite", false, options);
+        setFlagFromValue((int*) &flags, (int)MDBX_APPEND, "append", false, options);
+        setFlagFromValue((int*) &flags, (int)MDBX_APPENDDUP, "appendDup", false, options);
         
         // NOTE: does not make sense to support MDBX_RESERVE, because it wouldn't save the memcpy from V8 to lmdbx
     }

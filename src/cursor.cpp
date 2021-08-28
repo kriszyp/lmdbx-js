@@ -117,7 +117,7 @@ NAN_METHOD(CursorWrap::del) {
         }
         
         auto options = Nan::To<v8::Object>(info[0]).ToLocalChecked();
-        setFlagFromValue(&(int)flags, (int)MDBX_NODUPDATA, "noDupData", false, options);
+        setFlagFromValue((int*) &flags, (int)MDBX_NODUPDATA, "noDupData", false, options);
     }
 
     CursorWrap *cw = Nan::ObjectWrap::Unwrap<CursorWrap>(info.This());

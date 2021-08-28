@@ -96,12 +96,12 @@ NAN_METHOD(DbiWrap::ctor) {
 
         // NOTE: mdbx_set_relfunc is not exposed because MDBX_FIXEDMAP is "highly experimental"
         // NOTE: mdbx_set_relctx is not exposed because MDBX_FIXEDMAP is "highly experimental"
-        setFlagFromValue(&(int)flags, (int)MDBX_REVERSEKEY, "reverseKey", false, options);
-        setFlagFromValue(&(int)flags, (int)MDBX_DUPSORT, "dupSort", false, options);
-        setFlagFromValue(&(int)flags, (int)MDBX_DUPFIXED, "dupFixed", false, options);
-        setFlagFromValue(&(int)flags, (int)MDBX_INTEGERDUP, "integerDup", false, options);
-        setFlagFromValue(&(int)flags, (int)MDBX_REVERSEDUP, "reverseDup", false, options);
-        setFlagFromValue(&(int)flags, (int)MDBX_CREATE, "create", false, options);
+        setFlagFromValue((int*) &flags, (int)MDBX_REVERSEKEY, "reverseKey", false, options);
+        setFlagFromValue((int*) &flags, (int)MDBX_DUPSORT, "dupSort", false, options);
+        setFlagFromValue((int*) &flags, (int)MDBX_DUPFIXED, "dupFixed", false, options);
+        setFlagFromValue((int*) &flags, (int)MDBX_INTEGERDUP, "integerDup", false, options);
+        setFlagFromValue((int*) &flags, (int)MDBX_REVERSEDUP, "reverseDup", false, options);
+        setFlagFromValue((int*) &flags, (int)MDBX_CREATE, "create", false, options);
 
         // TODO: wrap mdbx_set_compare
         // TODO: wrap mdbx_set_dupsort
