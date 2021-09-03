@@ -10,12 +10,8 @@
       "target_name": "lmdb-store",
       "win_delay_load_hook": "false",
       "sources": [
-        "dependencies/libmdbx/src/core.c",
-        "dependencies/libmdbx/src/lck-windows.c",
-        "dependencies/libmdbx/src/osal.c",
-        "dependencies/libmdbx/src/lck-posix.c",
-        "dependencies/libmdbx/src/version.c",
-        "dependencies/libmdbx/src/mdbx.c++",
+        "dependencies/libmdbx/mdbx.c",
+        "dependencies/libmdbx/mdbx.c++",
         "dependencies/lz4/lib/lz4.h",
         "dependencies/lz4/lib/lz4.c",
         "src/node-lmdbx.cpp",
@@ -30,7 +26,6 @@
       "defines": ["MDB_FIXEDSIZE", "MDB_PARANOID"],
       "include_dirs": [
         "<!(node -e \"require('nan')\")",
-        "dependencies/libmdbx/src",
         "dependencies/libmdbx",
         "dependencies/lz4/lib"
       ],

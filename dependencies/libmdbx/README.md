@@ -73,7 +73,6 @@ _MithrilDB_ is a rightly relevant name.
 
 [![https://t.me/libmdbx](https://raw.githubusercontent.com/wiki/erthink/libmdbx/img/telegram.png)](https://t.me/libmdbx)
 [![GithubCI](https://github.com/erthink/libmdbx/workflows/CI/badge.svg)](https://github.com/erthink/libmdbx/actions?query=workflow%3ACI)
-[![TravisCI](https://travis-ci.org/erthink/libmdbx.svg?branch=master)](https://travis-ci.org/erthink/libmdbx)
 [![AppveyorCI](https://ci.appveyor.com/api/projects/status/ue94mlopn50dqiqg/branch/master?svg=true)](https://ci.appveyor.com/project/leo-yuriev/libmdbx/branch/master)
 [![CircleCI](https://circleci.com/gh/erthink/libmdbx/tree/master.svg?style=svg)](https://circleci.com/gh/erthink/libmdbx/tree/master)
 [![CirrusCI](https://api.cirrus-ci.com/github/erthink/libmdbx.svg)](https://cirrus-ci.com/github/erthink/libmdbx)
@@ -92,7 +91,7 @@ _MithrilDB_ is a rightly relevant name.
     - [Improvements beyond LMDB](#improvements-beyond-lmdb)
     - [History & Acknowledgments](#history)
 - [Usage](#usage)
-    - [Building](#building)
+    - [Building and Testing](#building-and-testing)
     - [API description](#api-description)
     - [Bindings](#bindings)
 - [Performance comparison](#performance-comparison)
@@ -154,11 +153,11 @@ transaction journal. No crash recovery needed. No maintenance is required.
 
 ## Limitations
 
-- **Page size**: a power of 2, maximum `65536` bytes, default `4096` bytes.
-- **Key size**: minimum 0, maximum ≈¼ pagesize (`1300` bytes for default 4K pagesize, `21780` bytes for 64K pagesize).
-- **Value size**: minimum 0, maximum `2146435072` (`0x7FF00000`) bytes for maps, ≈¼ pagesize for multimaps (`1348` bytes for default 4K pagesize, `21828` bytes for 64K pagesize).
-- **Write transaction size**: up to `4194301` (`0x3FFFFD`) pages (16 [GiB](https://en.wikipedia.org/wiki/Gibibyte) for default 4K pagesize, 256 [GiB](https://en.wikipedia.org/wiki/Gibibyte) for 64K pagesize).
-- **Database size**: up to `2147483648` pages (8 [TiB](https://en.wikipedia.org/wiki/Tebibyte) for default 4K pagesize, 128 [TiB](https://en.wikipedia.org/wiki/Tebibyte) for 64K pagesize).
+- **Page size**: a power of 2, minimum `256` (mostly for testing), maximum `65536` bytes, default `4096` bytes.
+- **Key size**: minimum `0`, maximum ≈½ pagesize (`2022` bytes for default 4K pagesize, `32742` bytes for 64K pagesize).
+- **Value size**: minimum `0`, maximum `2146435072` (`0x7FF00000`) bytes for maps, ≈½ pagesize for multimaps (`2022` bytes for default 4K pagesize, `32742` bytes for 64K pagesize).
+- **Write transaction size**: up to `1327217884` pages (`4.944272` TiB for default 4K pagesize, `79.108351` TiB for 64K pagesize).
+- **Database size**: up to `2147483648` pages (≈`8.0` TiB for default 4K pagesize, ≈`128.0` TiB for 64K pagesize).
 - **Maximum sub-databases**: `32765`.
 
 ## Gotchas
@@ -168,9 +167,11 @@ transaction journal. No crash recovery needed. No maintenance is required.
 2. _libmdbx_ is based on [B+ tree](https://en.wikipedia.org/wiki/B%2B_tree), so access to database pages is mostly random.
 Thus SSDs provide a significant performance boost over spinning disks for large databases.
 
-3. _libmdbx_ uses [shadow paging](https://en.wikipedia.org/wiki/Shadow_paging) instead of [WAL](https://en.wikipedia.org/wiki/Write-ahead_logging). Thus syncing data to disk might be a bottleneck for write intensive workload.
+3. _libmdbx_ uses [shadow paging](https://en.wikipedia.org/wiki/Shadow_paging) instead of [WAL](https://en.wikipedia.org/wiki/Write-ahead_logging).
+Thus syncing data to disk might be a bottleneck for write intensive workload.
 
-4. _libmdbx_ uses [copy-on-write](https://en.wikipedia.org/wiki/Copy-on-write) for [snapshot isolation](https://en.wikipedia.org/wiki/Snapshot_isolation) during updates, but read transactions prevents recycling an old retired/freed pages, since it read ones. Thus altering of data during a parallel
+4. _libmdbx_ uses [copy-on-write](https://en.wikipedia.org/wiki/Copy-on-write) for [snapshot isolation](https://en.wikipedia.org/wiki/Snapshot_isolation) during updates,
+but read transactions prevents recycling an old retired/freed pages, since it read ones. Thus altering of data during a parallel
 long-lived read operation will increase the process work set, may exhaust entire free database space,
 the database can grow quickly, and result in performance degradation.
 Try to avoid long running read transactions.
@@ -201,8 +202,8 @@ the user's point of view.
 ## Added Features
 
 1. Keys could be more than 2 times longer than _LMDB_.
-  > For DB with default page size _libmdbx_ support keys up to 1300 bytes
-  > and up to 21780 bytes for 64K page size. _LMDB_ allows key size up to
+  > For DB with default page size _libmdbx_ support keys up to 2022 bytes
+  > and up to 32742 bytes for 64K page size. _LMDB_ allows key size up to
   > 511 bytes and may silently loses data with large values.
 
 2. Up to 30% faster than _LMDB_ in [CRUD](https://en.wikipedia.org/wiki/Create,_read,_update_and_delete) benchmarks.
@@ -224,7 +225,7 @@ the user's point of view.
   > due to its internal limitations and unimplemented functions, i.e. the `MDBX_UNABLE_EXTEND_MAPSIZE` error will be returned.
 
 4. Automatic continuous zero-overhead database compactification.
-  > During each commit _libmdbx_ merges suitable freeing pages into unallocated area
+  > During each commit _libmdbx_ merges a freeing pages which adjacent with the unallocated area
   > at the end of file, and then truncates unused space when a lot enough of.
 
 5. The same database format for 32- and 64-bit builds.
@@ -344,6 +345,13 @@ Currently, libmdbx is only available in a
 Packages support for common Linux distributions is planned in the future,
 since release the version 1.0.
 
+## Never use tarballs nor zips automatically provided by Github !
+
+Please don't use tarballs nor zips which are automatically provided by Github.
+These archives do not contain version information and thus are unfit to build _libmdbx_.
+Instead of ones just clone the git repository, either download a tarball or zip with the properly amalgamated source core.
+Moreover, please vote for [ability of disabling auto-creation such unsuitable archives](https://github.community/t/disable-tarball).
+
 ## Source code embedding
 
 _libmdbx_ provides two official ways for integration in source code form:
@@ -363,7 +371,7 @@ The amalgamated source code could be created from the original clone of git
 repository on Linux by executing `make dist`. As a result, the desired
 set of files will be formed in the `dist` subdirectory.
 
-## Building
+## Building and Testing
 
 Both amalgamated and original source code provides build through the use
 [CMake](https://cmake.org/) or [GNU
@@ -373,11 +381,79 @@ are completely traditional and have minimal prerequirements like
 `build-essential`, i.e. the non-obsolete C/C++ compiler and a
 [SDK](https://en.wikipedia.org/wiki/Software_development_kit) for the
 target platform. Obviously you need building tools itself, i.e. `git`,
-`cmake` or GNU `make` with `bash`.
+`cmake` or GNU `make` with `bash`. For your convenience, `make help`
+and `make options` are also available for listing existing targets
+and build options respectively.
+
+The only significant specificity is that git' tags are required
+to build from complete (not amalgamated) source codes.
+Executing **`git fetch --tags --force --prune`** is enough to get ones,
+or `git fetch --unshallow --tags --prune --force` after the Github's
+[`actions/checkout@v2`](https://github.com/actions/checkout) either set **`fetch-depth: 0`** for it.
 
 So just using CMake or GNU Make in your habitual manner and feel free to
 fill an issue or make pull request in the case something will be
 unexpected or broken down.
+
+### Testing
+The amalgamated source code does not contain any tests for or several reasons.
+Please read [the explanation](https://github.com/erthink/libmdbx/issues/214#issuecomment-870717981) and don't ask to alter this.
+So for testing _libmdbx_ itself you need a full source code, i.e. the clone of a git repository, there is no option.
+
+The full source code of _libmdbx_ has a [`test` subdirectory](https://github.com/erthink/libmdbx/tree/master/test) with minimalistic test "framework".
+Actually yonder is a source code of the `mdbx_test` – console utility which has a set of command-line options that allow construct and run a reasonable enough test scenarios.
+This test utility is intended for _libmdbx_'s developers for testing library itself, but not for use by users.
+Therefore, only basic information is provided:
+
+   - There are few CRUD-based test cases (hill, TTL, nested, append, jitter, etc),
+     which can be combined to test the concurrent operations within shared database in a multi-processes environment.
+     This is the `basic` test scenario.
+   - The `Makefile` provide several self-described targets for testing: `smoke`, `test`, `check`, `memcheck`, `test-valgrind`,
+     `test-asan`, `test-leak`, `test-ubsan`, `cross-gcc`, `cross-qemu`, `gcc-analyzer`, `smoke-fault`, `smoke-singleprocess`,
+     `test-singleprocess`, 'long-test'. Please run `make --help` if doubt.
+   - In addition to the `mdbx_test` utility, there is the script [`long_stochastic.sh`](https://github.com/erthink/libmdbx/blob/master/test/long_stochastic.sh),
+     which calls `mdbx_test` by going through set of modes and options, with gradually increasing the number of operations and the size of transactions.
+     This script is used for mostly of all automatic testing, including `Makefile` targets and Continuous Integration.
+   - Brief information of available command-line options is available by `--help`.
+     However, you should dive into source code to get all, there is no option.
+
+Anyway, no matter how thoroughly the _libmdbx_ is tested, you should rely only on your own tests for a few reasons:
+
+1. Mostly of all use cases are unique.
+   So it is no warranty that your use case was properly tested, even the _libmdbx_'s tests engages stochastic approach.
+2. If there are problems, then your test on the one hand will help to verify whether you are using _libmdbx_ correctly,
+   on the other hand it will allow to reproduce the problem and insure against regression in a future.
+3. Actually you should rely on than you checked by yourself or take a risk.
+
+### Common important details
+
+#### Build reproducibility
+By default _libmdbx_ track build time via `MDBX_BUILD_TIMESTAMP` build option and macro.
+So for a [reproducible builds](https://en.wikipedia.org/wiki/Reproducible_builds) you should predefine/override it to known fixed string value.
+For instance:
+
+ - for reproducible build with make: `make MDBX_BUILD_TIMESTAMP=unknown ` ...
+ - or during configure by CMake: `cmake -DMDBX_BUILD_TIMESTAMP:STRING=unknown ` ...
+
+Of course, in addition to this, your toolchain must ensure the reproducibility of builds.
+For more information please refer to [reproducible-builds.org](https://reproducible-builds.org/).
+
+#### Containers
+There are no special traits nor quirks if you use libmdbx ONLY inside the single container.
+But in a cross-container cases or with a host-container(s) mix the two major things MUST be
+guaranteed:
+
+1. Coherence of memory mapping content and unified page cache inside OS kernel for host and all container(s) operated with a some DB.
+Basically this means must be only a single physical copy of each memory mapped DB' page in the system memory.
+
+2. Uniqueness of PID values and/or a common space for ones:
+    - for POSIX systems: PID uniqueness for all processes operated with a DB.
+      I.e. the `--pid=host` is required for run DB-aware processes inside Docker,
+      either without host interaction a `--pid=container:<name|id>` with the same name/id.
+    - for non-POSIX (i.e. Windows) systems: inter-visibility of processes handles.
+      I.e. the `OpenProcess(SYNCHRONIZE, ..., PID)` must return reasonable error,
+      including `ERROR_ACCESS_DENIED`,
+      but not the `ERROR_INVALID_PARAMETER` as for an invalid/non-existent PID.
 
 #### DSO/DLL unloading and destructors of Thread-Local-Storage objects
 When building _libmdbx_ as a shared library or use static _libmdbx_ as a
@@ -431,11 +507,11 @@ recommended. Otherwise do not forget to add `ntdll.lib` to linking.
 
 Building by MinGW, MSYS or Cygwin is potentially possible. However,
 these scripts are not tested and will probably require you to modify the
-CMakeLists.txt or Makefile respectively.
+`CMakeLists.txt` or `Makefile` respectively.
 
 It should be noted that in _libmdbx_ was efforts to resolve
-runtime dependencies from CRT and other libraries Visual Studio.
-For this is enough to define the `MDBX_AVOID_CRT` during build.
+runtime dependencies from CRT and other MSVC libraries.
+For this is enough to define the `MDBX_WITHOUT_MSVC_CRT` during build.
 
 An example of running a basic test script can be found in the
 [CI-script](appveyor.yml) for [AppVeyor](https://www.appveyor.com/). To
@@ -471,7 +547,7 @@ Please refer to the [official guide](https://developer.android.com/studio/projec
 
 ### iOS
 To build _libmdbx_ for iOS, we recommend using CMake with the
-"[toolchain file](https://cmake.org/cmake/help/latest/variable/CMAKE_TOOLCHAIN_FILE.html)"
+["toolchain file"](https://cmake.org/cmake/help/latest/variable/CMAKE_TOOLCHAIN_FILE.html)
 from the [ios-cmake](https://github.com/leetal/ios-cmake) project.
 
 <!-- section-end -->
@@ -486,8 +562,13 @@ and/or see the [mdbx.h](mdbx.h) header.
 Bindings
 ========
 
-| Runtime | Repo | Author |
+| Runtime |  Repo  | Author |
 | ------- | ------ | ------ |
+| Haskell | [libmdbx-hs](https://hackage.haskell.org/package/libmdbx) | [Francisco Vallarino](https://github.com/fjvallarino) |
+| Python (draft) | [python-bindings](https://github.com/erthink/libmdbx/commits/python-bindings) branch | [Noel Kuntze](https://github.com/Thermi)
+| NodeJS  | [lmdbx-store](https://github.com/kriszyp/lmdbx-store) | [Kris Zyp](https://github.com/kriszyp/)
+| NodeJS  | [node-mdbx](https://www.npmjs.com/package/node-mdbx/) | [Сергей Федотов](mailto:sergey.fedotov@corp.mail.ru) |
+| Ruby    | [ruby-mdbx](https://rubygems.org/gems/mdbx/) | [Mahlon E. Smith](https://github.com/mahlonsmith) |
 | Go      | [mdbx-go](https://github.com/torquem-ch/mdbx-go) | [Alex Sharov](https://github.com/AskAlexSharov) |
 | [Nim](https://en.wikipedia.org/wiki/Nim_(programming_language)) | [NimDBX](https://github.com/snej/nimdbx) | [Jens Alfke](https://github.com/snej)
 | Rust    | [heed](https://github.com/Kerollmops/heed), [mdbx-rs](https://github.com/Kerollmops/mdbx-rs)   | [Clément Renault](https://github.com/Kerollmops) |
@@ -601,7 +682,9 @@ records.
  execution time of transactions. Each interval shows minimal and maximum
  execution time, cross marks standard deviation.
 
-**1,000,000 transactions in async-write mode**. In case of a crash all data is consistent and conforms to the one of last successful transactions, but lost transaction count is much higher than in
+**1,000,000 transactions in async-write mode**.
+In case of a crash all data is consistent and conforms to the one of last successful transactions,
+but lost transaction count is much higher than in
 lazy-write mode. All DB engines in this mode do as little writes as
 possible on persistent storage. _libmdbx_ uses
 [msync(MS_ASYNC)](https://linux.die.net/man/2/msync) in this mode.

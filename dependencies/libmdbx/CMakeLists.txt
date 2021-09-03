@@ -34,10 +34,14 @@
 ##  The Future will (be) Positive. Всё будет хорошо.
 ##
 
-cmake_minimum_required(VERSION 3.8.2)
+if(CMAKE_VERSION VERSION_LESS 3.12)
+  cmake_minimum_required(VERSION 3.8.2)
+else()
+  cmake_minimum_required(VERSION 3.12)
+endif()
 
 cmake_policy(PUSH)
-cmake_policy(VERSION 3.8.2)
+cmake_policy(VERSION ${CMAKE_MINIMUM_REQUIRED_VERSION})
 if(NOT CMAKE_VERSION VERSION_LESS 3.15)
   cmake_policy(SET CMP0091 NEW)
 endif()
@@ -70,7 +74,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git" AND
     message(SEND_ERROR "Git command-line tool not found")
   endif()
   set(MDBX_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
-elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" AND
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt" AND
     EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/mdbx.c" AND
     EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/mdbx.c++" AND
     EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config.h.in" AND
@@ -79,7 +83,13 @@ elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" AND
   set(MDBX_AMALGAMATED_SOURCE TRUE)
   set(MDBX_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 else()
-  message(FATAL_ERROR "Please use libmdbx as a git-submodule or the amalgamated source code")
+  message(FATAL_ERROR "\n"
+    "Please don't use tarballs nor zips which are automatically provided by Github!  "
+    "These archives do not contain version information and thus are unfit to build libmdbx.  "
+    "You can vote for ability of disabling auto-creation such unsuitable archives at https://github.community/t/disable-tarball\n"
+    "Instead of above, just clone the git repository, either download a tarball or zip with the properly amalgamated source core.  "
+    "For embedding libmdbx use a git-submodule or the amalgamated source code.\n"
+    "Please, avoid using any other techniques.")
 endif()
 
 if(DEFINED PROJECT_NAME)
@@ -117,11 +127,13 @@ else()
   enable_language(CXX)
 endif()
 
+# Set default build type to Release. This is to ease a User's life.
 if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE MinSizeRel CACHE STRING
+  set(CMAKE_BUILD_TYPE Release CACHE STRING
     "Choose the type of build, options are: Debug Release RelWithDebInfo MinSizeRel."
     FORCE)
 endif()
+string(TOUPPER ${CMAKE_BUILD_TYPE} CMAKE_BUILD_TYPE_UPPERCASE)
 
 if(NOT_SUBPROJECT AND (CMAKE_CROSSCOMPILING OR IOS))
   set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
@@ -164,14 +176,6 @@ if(CMAKE_C_COMPILER_ID STREQUAL "MSVC" AND MSVC_VERSION LESS 1900)
   message(SEND_ERROR "MSVC compiler ${MSVC_VERSION} is too old for building MDBX."
     " At least 'Microsoft Visual Studio 2015' is required.")
 endif()
-
-# Set default build type to Release. This is to ease a User's life.
-if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Release CACHE STRING
-    "Choose the type of build, options are: Debug Release RelWithDebInfo MinSizeRel."
-    FORCE)
-endif()
-string(TOUPPER ${CMAKE_BUILD_TYPE} CMAKE_BUILD_TYPE_UPPERCASE)
 
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
@@ -228,8 +232,13 @@ else()
   endif()
 
   if(CMAKE_INTERPROCEDURAL_OPTIMIZATION_AVAILABLE
-      OR GCC_LTO_AVAILABLE OR MSVC_LTO_AVAILABLE OR CLANG_LTO_AVAILABLE)
+      OR GCC_LTO_AVAILABLE OR MSVC_LTO_AVAILABLE OR
+      (CLANG_LTO_AVAILABLE AND
+        ((DEFINED MDBX_ENABLE_TESTS AND NOT MDBX_ENABLE_TESTS)
+        OR NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4.0)))
     option(INTERPROCEDURAL_OPTIMIZATION "Enable interprocedural/LTO optimization" ${INTERPROCEDURAL_OPTIMIZATION_DEFAULT})
+  else()
+    set(INTERPROCEDURAL_OPTIMIZATION OFF)
   endif()
 
   if(INTERPROCEDURAL_OPTIMIZATION)
@@ -328,9 +337,11 @@ list(FIND CMAKE_CXX_COMPILE_FEATURES cxx_std_20 HAS_CXX20)
 if(NOT DEFINED MDBX_CXX_STANDARD)
   if(DEFINED CMAKE_CXX_STANDARD)
     set(MDBX_CXX_STANDARD ${CMAKE_CXX_STANDARD})
-  elseif(NOT HAS_CXX20 LESS 0)
+  elseif(NOT HAS_CXX20 LESS 0
+      AND NOT (CMAKE_COMPILER_IS_CLANG AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9))
     set(MDBX_CXX_STANDARD 20)
-  elseif(NOT HAS_CXX17 LESS 0)
+  elseif(NOT HAS_CXX17 LESS 0
+      AND NOT (CMAKE_COMPILER_IS_CLANG AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 5))
     set(MDBX_CXX_STANDARD 17)
   elseif(NOT HAS_CXX14 LESS 0)
     set(MDBX_CXX_STANDARD 14)
@@ -449,11 +460,8 @@ if(${CMAKE_SYSTEM_NAME} STREQUAL "Darwin" OR IOS)
 endif()
 if(${CMAKE_SYSTEM_NAME} STREQUAL "Windows")
   if(MDBX_NTDLL_EXTRA_IMPLIB)
-    add_mdbx_option(MDBX_AVOID_CRT "Avoid dependence from MSVC CRT and use ntdll.dll instead" OFF)
+    add_mdbx_option(MDBX_WITHOUT_MSVC_CRT "Avoid dependence from MSVC CRT and use ntdll.dll instead" OFF)
   endif()
-  add_mdbx_option(MDBX_CONFIG_MANUAL_TLS_CALLBACK
-    "Provide mdbx_dll_handler() for manual initialization" OFF)
-  mark_as_advanced(MDBX_CONFIG_MANUAL_TLS_CALLBACK)
 else()
   add_mdbx_option(MDBX_USE_OFDLOCKS "Use Open file description locks (aka OFD locks, non-POSIX)" AUTO)
   mark_as_advanced(MDBX_USE_OFDLOCKS)
@@ -466,7 +474,12 @@ option(MDBX_FORCE_ASSERTIONS "Force enable assertion checking" OFF)
 option(MDBX_DISABLE_PAGECHECKS "Disable some checks to reduce an overhead and detection probability of database corruption to a values closer to the LMDB" OFF)
 
 if(NOT MDBX_AMALGAMATED_SOURCE)
-  add_mdbx_option(MDBX_ALLOY_BUILD "Build MDBX library through single/alloyed object file" ON)
+  if(CMAKE_CONFIGURATION_TYPES OR CMAKE_BUILD_TYPE_UPPERCASE STREQUAL "DEBUG")
+    set(MDBX_ALLOY_BUILD_DEFAULT OFF)
+  else()
+    set(MDBX_ALLOY_BUILD_DEFAULT ON)
+  endif()
+  add_mdbx_option(MDBX_ALLOY_BUILD "Build MDBX library through single/alloyed object file" ${MDBX_ALLOY_BUILD_DEFAULT})
 endif()
 
 if((MDBX_BUILD_TOOLS OR MDBX_ENABLE_TESTS) AND MDBX_BUILD_SHARED_LIBRARY)
@@ -479,9 +492,9 @@ if(CMAKE_CXX_COMPILER_LOADED AND MDBX_CXX_STANDARD GREATER_EQUAL 11 AND MDBX_CXX
   if(NOT MDBX_AMALGAMATED_SOURCE)
     option(MDBX_ENABLE_TESTS "Build MDBX tests" ${BUILD_TESTING})
   endif()
-  if(NOT MDBX_AVOID_CRT
+  if(NOT MDBX_WITHOUT_MSVC_CRT
       AND NOT (CMAKE_COMPILER_IS_GNUCXX AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4.8)
-      AND NOT (CMAKE_COMPILER_IS_CLANG AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4)
+      AND NOT (CMAKE_COMPILER_IS_CLANG AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 3.9)
       AND NOT (MSVC AND MSVC_VERSION LESS 1900))
     option(MDBX_BUILD_CXX "Build C++ portion" ON)
   else()
@@ -537,6 +550,13 @@ else()
   message(STATUS "Use C${MDBX_C_STANDARD} for libmdbx but C++ portion is disabled")
 endif()
 
+if(SUBPROJECT AND MSVC)
+  if(MSVC_VERSION LESS 1900)
+    message(FATAL_ERROR "At least \"Microsoft C/C++ Compiler\" version 19.0.24234.1 (Visual Studio 2015 Update 3) is required.")
+  endif()
+  add_compile_options("/utf-8")
+endif()
+
 macro(target_setup_options TARGET)
   if(DEFINED INTERPROCEDURAL_OPTIMIZATION)
     set_target_properties(${TARGET} PROPERTIES
@@ -547,23 +567,27 @@ macro(target_setup_options TARGET)
   if(MDBX_BUILD_CXX)
     set_target_properties(${TARGET} PROPERTIES
       CXX_STANDARD ${MDBX_CXX_STANDARD} CXX_STANDARD_REQUIRED ON)
+    if(MSVC AND NOT MSVC_VERSION LESS 1910)
+      target_compile_options(${TARGET} INTERFACE "/Zc:__cplusplus")
+    endif()
   endif()
-  if(CC_HAS_FASTMATH)
+  if(CC_HAS_FASTMATH
+      AND NOT (CMAKE_COMPILER_IS_CLANG AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 10))
     target_compile_options(${TARGET} PRIVATE "-ffast-math")
   endif()
   if(CC_HAS_VISIBILITY)
     target_compile_options(${TARGET} PRIVATE "-fvisibility=hidden")
   endif()
   if(BUILD_FOR_NATIVE_CPU AND CC_HAS_ARCH_NATIVE)
-    target_compile_options(${TARGET} PUBLIC "-march=native")
+    target_compile_options(${TARGET} PRIVATE "-march=native")
   endif()
 endmacro()
 
 macro(libmdbx_setup_libs TARGET MODE)
   target_link_libraries(${TARGET} ${MODE} Threads::Threads)
   if(${CMAKE_SYSTEM_NAME} STREQUAL "Windows")
-    target_link_libraries(${TARGET} ${MODE} ntdll.lib)
-    if(MDBX_NTDLL_EXTRA_IMPLIB AND MDBX_AVOID_CRT)
+    target_link_libraries(${TARGET} ${MODE} ntdll)
+    if(MDBX_NTDLL_EXTRA_IMPLIB AND MDBX_WITHOUT_MSVC_CRT)
       target_link_libraries(${TARGET} ${MODE} ntdll_extra)
     endif()
   elseif(${CMAKE_SYSTEM_NAME} STREQUAL "SunOS" OR ${CMAKE_SYSTEM_NAME} STREQUAL "Solaris")
@@ -571,7 +595,7 @@ macro(libmdbx_setup_libs TARGET MODE)
   elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Android")
     target_link_libraries(${TARGET} ${MODE} log)
   endif()
-  if(LIBCXX_FILESYSTEM AND MDBX_BUILD_CXX)
+  if(MDBX_CXX_STANDARD GREATER_EQUAL 17 AND LIBCXX_FILESYSTEM AND MDBX_BUILD_CXX)
     target_link_libraries(${TARGET} ${MODE} ${LIBCXX_FILESYSTEM})
   endif()
 endmacro()
@@ -602,7 +626,7 @@ if(MDBX_BUILD_SHARED_LIBRARY)
   target_setup_options(mdbx)
   libmdbx_setup_libs(mdbx PRIVATE)
   if(MSVC)
-    if(MDBX_NTDLL_EXTRA_IMPLIB AND MDBX_AVOID_CRT)
+    if(MDBX_NTDLL_EXTRA_IMPLIB AND MDBX_WITHOUT_MSVC_CRT)
       set_property(TARGET mdbx PROPERTY LINKER_FLAGS "/NODEFAULTLIB")
     else()
       set_property(TARGET mdbx PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
@@ -648,7 +672,7 @@ if(MDBX_BUILD_TOOLS)
     set(WINGETOPT_SRC "")
   endif()
 
-  foreach(TOOL mdbx_chk mdbx_copy mdbx_stat mdbx_dump mdbx_load)
+  foreach(TOOL mdbx_chk mdbx_copy mdbx_stat mdbx_dump mdbx_load mdbx_drop)
     add_executable(${TOOL} mdbx.h ${MDBX_SOURCE_DIR}/${TOOL}.c ${WINGETOPT_SRC})
     if(MDBX_C_STANDARD)
       set_target_properties(${TOOL} PROPERTIES
@@ -668,34 +692,34 @@ endif()
 # mdbx-shared-lib installation
 if(NOT DEFINED MDBX_DLL_INSTALL_DESTINATION)
   if(WIN32)
-    set(MDBX_DLL_INSTALL_DESTINATION bin)
+    set(MDBX_DLL_INSTALL_DESTINATION ${CMAKE_INSTALL_BINDIR})
   else()
-    set(MDBX_DLL_INSTALL_DESTINATION lib)
+    set(MDBX_DLL_INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR})
   endif()
 endif()
 if(MDBX_BUILD_SHARED_LIBRARY)
   if(CMAKE_VERSION VERSION_LESS 3.12)
     install(TARGETS mdbx EXPORT libmdbx
       LIBRARY DESTINATION ${MDBX_DLL_INSTALL_DESTINATION} COMPONENT runtime
-      OBJECTS DESTINATION lib COMPONENT devel
-      ARCHIVE DESTINATION lib COMPONENT devel
-      PUBLIC_HEADER DESTINATION include COMPONENT devel
-      INCLUDES DESTINATION include COMPONENT devel)
+      OBJECTS DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel
+      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel
+      PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT devel
+      INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT devel)
   else()
     install(TARGETS mdbx EXPORT libmdbx
       LIBRARY DESTINATION ${MDBX_DLL_INSTALL_DESTINATION} COMPONENT runtime
       NAMELINK_COMPONENT devel
-      OBJECTS DESTINATION lib COMPONENT devel
-      ARCHIVE DESTINATION lib COMPONENT devel
-      PUBLIC_HEADER DESTINATION include COMPONENT devel
-      INCLUDES DESTINATION include COMPONENT devel)
+      OBJECTS DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel
+      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel
+      PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT devel
+      INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT devel)
   endif()
 endif(MDBX_BUILD_SHARED_LIBRARY)
 
 # mdbx-tools installation
 if(MDBX_BUILD_TOOLS)
   if(NOT DEFINED MDBX_TOOLS_INSTALL_DESTINATION)
-    set(MDBX_TOOLS_INSTALL_DESTINATION bin)
+    set(MDBX_TOOLS_INSTALL_DESTINATION ${CMAKE_INSTALL_BINDIR})
   endif()
   install(
     TARGETS
@@ -704,12 +728,13 @@ if(MDBX_BUILD_TOOLS)
     mdbx_copy
     mdbx_dump
     mdbx_load
+    mdbx_drop
     RUNTIME
     DESTINATION ${MDBX_TOOLS_INSTALL_DESTINATION}
     COMPONENT runtime)
   if(MDBX_INSTALL_MANPAGES)
     if(NOT DEFINED MDBX_MAN_INSTALL_DESTINATION)
-      set(MDBX_MAN_INSTALL_DESTINATION man/man1)
+      set(MDBX_MAN_INSTALL_DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
     endif()
     install(
       FILES
@@ -718,6 +743,7 @@ if(MDBX_BUILD_TOOLS)
       "${MDBX_SOURCE_DIR}/man1/mdbx_copy.1"
       "${MDBX_SOURCE_DIR}/man1/mdbx_dump.1"
       "${MDBX_SOURCE_DIR}/man1/mdbx_load.1"
+      "${MDBX_SOURCE_DIR}/man1/mdbx_drop.1"
       DESTINATION ${MDBX_MAN_INSTALL_DESTINATION}
       COMPONENT doc)
   endif()
@@ -727,26 +753,28 @@ endif(MDBX_BUILD_TOOLS)
 if(MDBX_INSTALL_STATIC)
   if(CMAKE_VERSION VERSION_LESS 3.12)
     install(TARGETS mdbx-static EXPORT libmdbx
-      LIBRARY DESTINATION lib COMPONENT devel
-      OBJECTS DESTINATION lib COMPONENT devel
-      ARCHIVE DESTINATION lib COMPONENT devel
-      PUBLIC_HEADER DESTINATION include COMPONENT devel
-      INCLUDES DESTINATION include COMPONENT devel)
+      LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel
+      OBJECTS DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel
+      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel
+      PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT devel
+      INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT devel)
   else()
     install(TARGETS mdbx-static EXPORT libmdbx
-      LIBRARY DESTINATION lib COMPONENT devel
+      LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel
       NAMELINK_COMPONENT devel
-      OBJECTS DESTINATION lib COMPONENT devel
-      ARCHIVE DESTINATION lib COMPONENT devel
-      PUBLIC_HEADER DESTINATION include COMPONENT devel
-      INCLUDES DESTINATION include COMPONENT devel)
+      OBJECTS DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel
+      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel
+      PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT devel
+      INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT devel)
   endif()
 endif(MDBX_INSTALL_STATIC)
 
 ################################################################################
 
 # collect options & build info
-string(TIMESTAMP MDBX_BUILD_TIMESTAMP UTC)
+if(NOT DEFINED MDBX_BUILD_TIMESTAMP)
+  string(TIMESTAMP MDBX_BUILD_TIMESTAMP UTC)
+endif()
 set(MDBX_BUILD_FLAGS ${CMAKE_C_FLAGS})
 if(MDBX_BUILD_CXX)
   set(MDBX_BUILD_FLAGS ${CMAKE_CXX_FLAGS})
