@@ -397,17 +397,9 @@ NAN_METHOD(EnvWrap::open) {
 
     // Parse the mapSize option
     Local<Value> mapSizeOption = options->Get(Nan::GetCurrentContext(), Nan::New<String>("mapSize").ToLocalChecked()).ToLocalChecked();
-    fprintf(stderr, "Checking mapSize\n");
     if (mapSizeOption->IsNumber()) {
         intptr_t mapSizeSizeT = mapSizeOption->NumberValue(Nan::GetCurrentContext()).FromJust();
-        fprintf(stderr, "Got mapSize %u\n", mapSizeSizeT > 100);
-        intptr_t size_lower = 0x4000;
-        intptr_t size_upper = 0x10000000000;
-        intptr_t growth_step = 0x1000;
-        intptr_t shrink_threshold = 0x2000;
-        intptr_t pagesize = 0x1000;
-        rc = mdbx_env_set_geometry(ew->env, 0x4000, 0x4000, mapSizeSizeT, 0x1000, 0x2000, 0x1000);
-        fprintf(stderr, "Set mapSize %llu\n", mapSizeSizeT);
+        rc = mdbx_env_set_geometry(ew->env, -1, -1, mapSizeSizeT, -1, -1, -1);
         if (rc != 0) {
             uv_mutex_unlock(envsLock);
             return throwLmdbxError(rc);

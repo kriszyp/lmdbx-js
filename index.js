@@ -185,7 +185,6 @@ function open(path, options) {
 			let txn
 			try {
 				this.transactions++
-				console.log('transaction', name)
 				resetReadTxn()
 				txn = writeTxn = env.beginTxn()
 				/*if (scheduledOperations && runNextBatch) {
@@ -200,15 +199,12 @@ function open(path, options) {
 				TODO: To reenable forced sequential writes, we need to re-execute the operations if we get an env resize
 				*/
 				return when(execute(), (result) => {
-					console.log('finished execution', name)
 					try {
 						resetReadTxn()
 						if (abort) {
 							txn.abort()
-				console.log('transaction aborted', name)
 						} else {
 							txn.commit()
-				console.log('transaction committed', name)
 						}
 						writeTxn = null
 						return result
@@ -361,11 +357,8 @@ function open(path, options) {
 			let localTxn, hadWriteTxn = writeTxn
 			try {
 				this.writes++
-				console.log('putSync', name)
-				resetReadTxn()
 				if (!writeTxn) {
 					localTxn = writeTxn = env.beginTxn()
-				console.log('putSyncStarted', name)
 				}
 				if (this.encoder)
 					value = this.encoder.encode(value)
@@ -378,9 +371,7 @@ function open(path, options) {
 					writeTxn.putBinary(this.db, id, value, version)
 				}
 				if (localTxn) {
-					console.log('putSync committing', name)
 					writeTxn.commit()
-					console.log('putSync committed', name)
 
 					writeTxn = null
 				}
@@ -397,10 +388,7 @@ function open(path, options) {
 			let localTxn, hadWriteTxn = writeTxn
 			try {
 				if (!writeTxn) {
-				console.log('removeSync', name)
-					resetReadTxn()
 					localTxn = writeTxn = env.beginTxn()
-				console.log('removeSync started', name)
 				}
 				let deleteValue
 				if (ifVersionOrValue !== undefined) {
@@ -418,9 +406,7 @@ function open(path, options) {
 				else
 					result = writeTxn.del(this.db, id)
 				if (localTxn) {
-					console.log('removeSync committing', name)
 					writeTxn.commit()
-					console.log('removeSync committed', name)
 					writeTxn = null
 					resetReadTxn()
 				}
@@ -657,7 +643,6 @@ function open(path, options) {
 								let start = Date.now()
 								let results = Buffer.alloc(operations.length)
 								let callback = (error) => {
-									console.log('batch finished', name, error)
 									let duration = Date.now() - start
 									this.averageTransactionTime = (this.averageTransactionTime * 3 + duration) / 4
 									//console.log('did batch', (duration) + 'ms', name, operations.length/*map(o => o[1].toString('binary')).join(',')*/)
@@ -682,7 +667,6 @@ function open(path, options) {
 									}
 								}
 								try {
-									console.log('batch start', name)
 									if (sync === true) {
 										env.batchWrite(operations, results)
 										callback()
@@ -824,7 +808,6 @@ function open(path, options) {
 						if (existingStructures.length != previousLength)
 							return false // it changed, we need to indicate that we couldn't update
 						resetReadTxn()
-						console.log('updating save structures')
 						writeTxn.putBinary(this.db, this.sharedStructuresKey, this.encoder.encode(structures))
 					})
 				},

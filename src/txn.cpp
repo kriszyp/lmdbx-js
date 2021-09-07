@@ -70,9 +70,6 @@ NAN_METHOD(TxnWrap::ctor) {
         // Get flags from options
 
         setFlagFromValue((int*) &flags, (int)MDBX_TXN_RDONLY, "readOnly", false, options);
-    } else {
-    fprintf(stderr, "Beginning transaction\n");
-        
     }
     
     // Check existence of current write transaction
@@ -116,7 +113,6 @@ NAN_METHOD(TxnWrap::commit) {
     }
 
     int rc = mdbx_txn_commit(tw->txn);
-    fprintf(stderr, "Committed transaction\n");
     tw->removeFromEnvWrap();
     tw->txn = nullptr;
 
