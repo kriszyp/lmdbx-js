@@ -6,7 +6,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "http://github.com/DoctorEvidence/lmdbx-store"
+    "url": "http://github.com/kriszyp/lmdbx-store"
   },
   "keywords": [
     "lmdb",
