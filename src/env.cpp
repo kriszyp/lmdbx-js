@@ -427,7 +427,8 @@ NAN_METHOD(EnvWrap::open) {
     setFlagFromValue((int*) &flags, (int)MDBX_NOMEMINIT , "noMemInit", false, options);
     setFlagFromValue((int*) &flags, (int)MDBX_NORDAHEAD , "noReadAhead", false, options);
     setFlagFromValue((int*) &flags, (int)MDBX_NOMETASYNC, "noMetaSync", false, options);
-    setFlagFromValue((int*) &flags, (int)MDBX_SAFE_NOSYNC, "noSync", false, options);
+    setFlagFromValue((int*) &flags, (int)MDBX_SAFE_NOSYNC, "safeNoSync", false, options);
+    setFlagFromValue((int*) &flags, (int)MDBX_UTTERLY_NOSYNC, "noSync", false, options);
     setFlagFromValue((int*) &flags, (int)MDBX_MAPASYNC, "mapAsync", false, options);
     //setFlagFromValue(&flags, MDBX_NOLOCK, "unsafeNoLock", false, options);*/
 
