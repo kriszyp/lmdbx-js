@@ -14,7 +14,7 @@
 * Optional native off-main-thread compression with high-performance LZ4 compression
 * And ridiculously fast and efficient:
 
-This library is branched from [lmdb-js](https://github.com/DoctorEvidence/lmdb-js), and is maintained alongside lmdb-js, but adapted for _libmdbx_. _libmdbx_ provides some important improvements over LMDB; in particular, it claims significantly better management and collection of free-space (which can sometimes be a problem with LMDB). There are a number of additional features available libmdbx, that maybe be exposed in lmdbx-js at some point, as well.
+This library is branched from [lmdb-js](https://github.com/DoctorEvidence/lmdb-js), and is maintained alongside lmdb-js, but adapted for _libmdbx_. _libmdbx_ provides some important improvements over LMDB; in particular, it offers significantly better management and collection of free-space (which can sometimes be a problem with LMDB). There are a number of additional features available libmdbx, that maybe be exposed in lmdbx-js at some point, as well.
 
 However, there are only a few reasons for remaining with the core LMDB/lmdb-js package/project:
 * On Windows, LMDB has been upgraded to use overlapping write-through writes that significantly faster than `FlushFileBuffers`, and until https://github.com/erthink/libmdbx/issues/224 is resolved, write performance is likely to be much better for Windows with LMDB.

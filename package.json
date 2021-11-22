@@ -1,7 +1,7 @@
 {
   "name": "lmdbx",
   "author": "Kris Zyp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Simple, efficient, scalable data store wrapper for libmdbx",
   "license": "MIT",
   "repository": {
