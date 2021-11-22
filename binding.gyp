@@ -33,6 +33,7 @@
         "dependencies/libmdbx",
         "dependencies/lz4/lib"
       ],
+      "defines": ["MDBX_TXN_CHECKOWNER=0"],
       "conditions": [
         ["OS=='linux'", {
           "variables": {
