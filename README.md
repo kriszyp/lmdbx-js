@@ -14,7 +14,12 @@
 * Optional native off-main-thread compression with high-performance LZ4 compression
 * And ridiculously fast and efficient:
 
-Benchmarking on Node 14.9, with 3.4Ghz i7-4770 Windows, a get operation, using JS numbers as a key, retrieving data from the database (random access), and decoding the data into a structured object with 10 properties (using default [MessagePack encoding](https://github.com/kriszyp/msgpackr)), can be done in less than one microsecond, or a little over a 1,200,000/sec on a single thread. This is almost twice as fast as a single native `JSON.parse` call with the same object without any DB interaction! libmdbx scales effortlessly across multiple processes or threads; over 4,500,000 operations/sec on the same 4/8 core computer by running across multiple threads. By running writes on a separate transactional thread, these are extremely fast as well. With encoding the same objects, full encoding and writes can be performed at about 500,000 puts/second or 1,700,000 puts/second on multiple threads.
+This library is branched from [lmdb-js](https://github.com/DoctorEvidence/lmdb-js), and is maintained alongside lmdb-js, but adapted for _libmdbx_. _libmdbx_ provides some important improvements over LMDB; in particular, it claims significantly better management and collection of free-space (which can sometimes be a problem with LMDB). There are a number of additional features available libmdbx, that maybe be exposed in lmdbx-js at some point, as well.
+
+However, there are only a few reasons for remaining with the core LMDB/lmdb-js package/project:
+* On Windows, LMDB has been upgraded to use overlapping write-through writes that significantly faster than `FlushFileBuffers`, and until https://github.com/erthink/libmdbx/issues/224 is resolved, write performance is likely to be much better for Windows with LMDB.
+* lmdb-js has modifications of LMDB that allow for automated growth of the memory maps, and this requires a little more explicit handling in libmdbx.
+* There are still some unresolved issues in lmdbx-js with `doesExist` and deferred opening of databases that I am working on.
 
 This library is published to the NPM package `lmdbx` (the 0.1.x versions were published to `lmdbx-store`), and can be installed with:
 ```npm install lmdbx```
