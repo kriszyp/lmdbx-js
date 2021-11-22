@@ -523,7 +523,7 @@ NAN_METHOD(EnvWrap::beginTxn) {
     Nan::MaybeLocal<Object> maybeInstance;
 
     int flags = info[0]->IntegerValue(Nan::GetCurrentContext()).FromJust();
-    if (!(flags & MDBX_RDONLY)) {
+    if (!(flags & (int) MDBX_TXN_RDONLY)) {
         //fprintf(stderr, "begin sync txn %i\n", flags);
         EnvWrap *ew = Nan::ObjectWrap::Unwrap<EnvWrap>(info.This());
         MDBX_env *env = ew->env;
