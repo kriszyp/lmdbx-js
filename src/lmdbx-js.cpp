@@ -1,5 +1,32 @@
+#include "lmdbx-js.h"
 
-// This file is part of node-lmdbx, the Node.js binding for lmdbx
+using namespace v8;
+using namespace node;
+
+int Logging::initLogging() {
+    char* logging = getenv("LMDBX_JS_LOGGING");
+    if (logging)
+        fprintf(stderr, "Start logging for lmdb-js\n");
+    return !!logging;
+}
+int Logging::debugLogging = Logging::initLogging();
+
+NODE_MODULE_INIT(/* exports, module, context */) {
+    if (Logging::debugLogging)
+        fprintf(stderr, "Start initialization\n");
+    // Initializes the module
+    // Export Env as constructor for EnvWrap
+    EnvWrap::setupExports(exports);
+
+    // Export Cursor as constructor for CursorWrap
+    CursorWrap::setupExports(exports);
+
+    // Export misc things
+    setupExportMisc(exports);
+    if (Logging::debugLogging)
+        fprintf(stderr, "Finished initialization\n");
+}
+// This file contains code from the node-lmdb project
 // Copyright (c) 2013-2017 Timur Kristóf
 // Licensed to you under the terms of the MIT license
 //
@@ -20,25 +47,3 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
-
-#include "node-lmdbx.h"
-
-using namespace v8;
-using namespace node;
-
-extern "C" {
-    // Initializes the module
-    void initializeModule(Local<Object> exports) {
-        // Export Env as constructor for EnvWrap
-        EnvWrap::setupExports(exports);
-
-        // Export Cursor as constructor for CursorWrap
-        CursorWrap::setupExports(exports);
-
-        // Export misc things
-        setupExportMisc(exports);
-    }
-
-    // Context-aware, ie. thread safe
-    NODE_MODULE_CONTEXT_AWARE(lmdbx, initializeModule)
-}

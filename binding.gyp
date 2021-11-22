@@ -1,20 +1,25 @@
 {
   "variables": {
       "os_linux_compiler%": "gcc",
-      "use_vl32%": "false",
       "use_robust%": "false",
-      "build_v8_with_gn": "false"
+      "use_data_v1%": "false",
+      "enable_fast_api_calls%": "false",
+      "enable_pointer_compression%": "false",
+      "target%": "",
+      "build_v8_with_gn": "false",
+      "runtime%": "node"
   },
   "targets": [
     {
-      "target_name": "lmdb-store",
+      "target_name": "lmdbx",
       "win_delay_load_hook": "false",
       "sources": [
+        "src/lmdbx-js.cpp",
         "dependencies/libmdbx/mdbx.c",
         "dependencies/libmdbx/mdbx.c++",
         "dependencies/lz4/lib/lz4.h",
         "dependencies/lz4/lib/lz4.c",
-        "src/node-lmdbx.cpp",
+        "src/writer.cpp",
         "src/env.cpp",
         "src/compression.cpp",
         "src/ordered-binary.cpp",
@@ -23,7 +28,6 @@
         "src/dbi.cpp",
         "src/cursor.cpp"
       ],
-      "defines": ["MDB_FIXEDSIZE", "MDB_PARANOID"],
       "include_dirs": [
         "<!(node -e \"require('nan')\")",
         "dependencies/libmdbx",
@@ -34,12 +38,13 @@
           "variables": {
             "gcc_version" : "<!(<(os_linux_compiler) -dumpversion | cut -d '.' -f 1)",
           },
-          "conditions": [
-            ["gcc_version>=7", {
-              "cflags": [
-                "-Wimplicit-fallthrough=2",
-              ],
-            }],
+          "cflags_cc": [
+            "-fPIC",
+            "-Wno-strict-aliasing",
+            "-Wno-unused-result",
+            "-Wno-cast-function-type",
+            "-fvisibility=hidden",
+            "-fvisibility-inlines-hidden",
           ],
           "ldflags": [
             "-fPIC",
@@ -50,33 +55,21 @@
             "-fvisibility=hidden",
             "-O3"
           ],
-          "cflags_cc": [
-            "-fPIC",
-            "-fvisibility=hidden",
-            "-fvisibility-inlines-hidden",
-            "-std=c++0x"
-          ]
-        }],
-        ["OS=='mac'", {
-          "xcode_settings": {
-            "OTHER_CPLUSPLUSFLAGS" : ["-std=c++11"],
-            "MACOSX_DEPLOYMENT_TARGET": "10.7",
-            "OTHER_LDFLAGS": ["-std=c++11"],
-            "CLANG_CXX_LIBRARY": "libc++"
-          }
         }],
         ["OS=='win'", {
-            "libraries": ["ntdll.lib"]
+            "libraries": ["ntdll.lib", "synchronization.lib"]
+        }],
+        ["enable_pointer_compression=='true'", {
+          "defines": ["V8_COMPRESS_POINTERS", "V8_COMPRESS_POINTERS_IN_ISOLATE_CAGE"],
+        }],
+        ['runtime=="electron"', {
+          "defines": ["NODE_RUNTIME_ELECTRON=1"]
+        }],
+        ["enable_fast_api_calls=='true'", {
+          "defines": ["ENABLE_FAST_API=1"],
         }],
         ["use_robust=='true'", {
-          "defines": ["MDB_FIXEDSIZE", "MDB_PARANOID", "MDB_USE_ROBUST"],
-        }],
-        ["use_vl32=='true'", {
-          "conditions": [
-            ["target_arch=='ia32'", {
-                "defines": ["MDB_FIXEDSIZE", "MDB_PARANOID", "MDB_VL32"]
-              }]
-            ]
+          "defines": ["MDBX_USE_ROBUST"],
         }],
       ],
     }

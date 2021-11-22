@@ -1,49 +1,31 @@
-
-// This file is part of node-lmdbx, the Node.js binding for lmdbx
-// Copyright (c) 2013-2017 Timur Kristóf
-// Copyright (c) 2021 Kristopher Tate
-// Licensed to you under the terms of the MIT license
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
-#include "node-lmdbx.h"
-
+#include "lmdbx-js.h"
 using namespace v8;
 using namespace node;
 
 #define IGNORE_NOTFOUND    (1)
 thread_local Nan::Persistent<Function>* EnvWrap::txnCtor;
 thread_local Nan::Persistent<Function>* EnvWrap::dbiCtor;
-//Nan::Persistent<Function> EnvWrap::txnCtor;
-//Nan::Persistent<Function> EnvWrap::dbiCtor;
-uv_mutex_t* EnvWrap::envsLock = EnvWrap::initMutex();
+
+pthread_mutex_t* EnvWrap::envsLock = EnvWrap::initMutex();
 std::vector<env_path_t> EnvWrap::envs;
 
-uv_mutex_t* EnvWrap::initMutex() {
-    uv_mutex_t* mutex = new uv_mutex_t;
-    uv_mutex_init(mutex);
+pthread_mutex_t* EnvWrap::initMutex() {
+    pthread_mutex_t* mutex = new pthread_mutex_t;
+    pthread_mutex_init(mutex, nullptr);
     return mutex;
 }
 
 EnvWrap::EnvWrap() {
     this->env = nullptr;
     this->currentWriteTxn = nullptr;
+	this->currentReadTxn = nullptr;
+    this->writeTxn = nullptr;
+    this->writeWorker = nullptr;
+	this->readTxnRenewed = false;
+    this->writingLock = new pthread_mutex_t;
+    this->writingCond = new pthread_cond_t;
+    pthread_mutex_init(this->writingLock, nullptr);
+    pthread_cond_init(this->writingCond, nullptr);
 }
 
 EnvWrap::~EnvWrap() {
@@ -54,19 +36,20 @@ EnvWrap::~EnvWrap() {
     }
     if (this->compression)
         this->compression->Unref();
+    pthread_mutex_destroy(this->writingLock);
+    pthread_cond_destroy(this->writingCond);
+    
 }
 
 void EnvWrap::cleanupStrayTxns() {
     if (this->currentWriteTxn) {
         mdbx_txn_abort(this->currentWriteTxn->txn);
-        this->currentWriteTxn->txn = nullptr;
         this->currentWriteTxn->removeFromEnvWrap();
     }
     while (this->readTxns.size()) {
         TxnWrap *tw = *this->readTxns.begin();
         mdbx_txn_abort(tw->txn);
         tw->removeFromEnvWrap();
-        tw->txn = nullptr;
     }
 }
 
@@ -159,211 +142,33 @@ class CopyWorker : public Nan::AsyncWorker {
     char* path;
     int flags;
 };
-
-struct condition_t {
-    MDBX_val key;
-    MDBX_val data;
-    MDBX_dbi dbi;
-    bool matchSize;
-    argtokey_callback_t freeKey;
-};
-
-struct action_t {
-    int actionType;
-    MDBX_val key;
-    union {
-        struct {
-            DbiWrap* dw;
-        };
-        struct {
-            MDBX_val data;
-            double ifVersion;
-            double version;
-            argtokey_callback_t freeValue;
-        };
-    };
-};/*
-struct action_t {
-    MDBX_val key;
-    MDBX_val data;
-    DbiWrap* dw;
-    condition_t *condition;
-    double ifVersion;
-    double version;
-    argtokey_callback_t freeKey;
-    argtokey_callback_t freeValue;
-};*/
-
-const int CHANGE_DB = 8;
-const int RESET_CONDITION = 9;
-const int CONDITION = 1;
-const int WRITE_WITH_VALUE = 2;
-const int DELETE_OPERATION = 4;
-
-const int FAILED_CONDITION = 1;
-const int SUCCESSFUL_OPERATION = 0;
-const int BAD_KEY = 3;
-const int NOT_FOUND = 2;
-
-class BatchWorker : public Nan::AsyncWorker {
-  public:
-    BatchWorker(MDBX_env* env, action_t *actions, int actionCount, int putFlags, KeySpace* keySpace, uint8_t* results, Nan::Callback *callback)
-      : Nan::AsyncWorker(callback, "node-lmdbx:Batch"),
-      env(env),
-      actionCount(actionCount),
-      results(results),
-      actions(actions),
-      putFlags(putFlags),
-      keySpace(keySpace)
-       {
+MDBX_txn* EnvWrap::getReadTxn() {
+    MDBX_txn* txn = writeTxn ? writeTxn->txn : nullptr;
+    if (txn)
+        return txn;
+    txn = currentReadTxn;
+    if (readTxnRenewed)
+        return txn;
+    if (txn)
+        mdbx_txn_renew(txn);
+    else {
+        mdbx_txn_begin(env, nullptr, MDBX_TXN_RDONLY, &txn);
+        currentReadTxn = txn;
     }
+    readTxnRenewed = true;
+    return txn;
+}
 
-    ~BatchWorker() {
-        delete[] actions;
-        delete keySpace;
-    }
-
-    void Execute() {
-        MDBX_txn *txn;
-        // we do compression in this thread to offload from main thread, but do it before transaction to minimize time that the transaction is open
-        DbiWrap* dw;
-        for (int i = 0; i < actionCount; i++) {
-            action_t* action = &actions[i];
-            int actionType = action->actionType;
-            if (actionType == CHANGE_DB)
-                dw = action->dw;
-            else if (actionType & WRITE_WITH_VALUE) {
-                Compression* compression = dw->compression;
-                if (compression) {
-                    action->freeValue = compression->compress(&action->data, action->freeValue);
-                }
-            }
-        }
-        int rc = mdbx_txn_begin(env, nullptr, MDBX_TXN_READWRITE, &txn);
-        if (rc != 0) {
-            return SetErrorMessage(mdbx_strerror(rc));
-        }
-        int validatedDepth = 0;
-        int conditionDepth = 0;
-
-        for (int i = 0; i < actionCount;) {
-            action_t* action = &actions[i];
-            int actionType = action->actionType;
-            if (actionType >= 8) {
-                if (actionType == CHANGE_DB) {
-                    // reset target db
-                    dw = action->dw;
-                } else { // actionType == CHANGE_DB
-                    // reset last condition
-                    conditionDepth--;
-                    if (validatedDepth > conditionDepth)
-                        validatedDepth--;
-                }
-                results[i++] = SUCCESSFUL_OPERATION;
-                continue;
-            }
-            bool validated;
-            if (validatedDepth < conditionDepth) {
-                // we are in an invalidated branch, just need to track depth
-                results[i] = FAILED_CONDITION;
-                validated = false;
-            } else if (actionType & CONDITION) { // has precondition
-                MDBX_val value;
-                // TODO: Use a cursor
-                rc = mdbx_get(txn, dw->dbi, &action->key, &value);
-                if (rc == MDBX_BAD_VALSIZE) {
-                    results[i] = BAD_KEY;
-                    validated = false;
-                } else {
-                    if (action->ifVersion == NO_EXIST_VERSION) {
-                        validated = rc;
-                    }
-                    else {
-                        if (rc)
-                            validated = false;
-                        else
-                            validated = action->ifVersion == *((double*)value.iov_base);
-                    }
-                    results[i] = validated ? SUCCESSFUL_OPERATION : FAILED_CONDITION;
-                }
-                rc = 0;
-            } else {
-                validated = true;
-                results[i] = SUCCESSFUL_OPERATION;
-            }
-            if (actionType & (WRITE_WITH_VALUE | DELETE_OPERATION)) { // has write operation to perform
-                if (validated) {
-                    if (actionType & DELETE_OPERATION) {
-                        rc = mdbx_del(txn, dw->dbi, &action->key, (actionType & WRITE_WITH_VALUE) ? &action->data : nullptr);
-                        if (rc == MDBX_NOTFOUND) {
-                            rc = 0; // ignore not_found errors
-                            results[i] = NOT_FOUND;
-                        }
-                    } else {
-                        if (dw->hasVersions)
-                            rc = putWithVersion(txn, dw->dbi, &action->key, &action->data, putFlags, action->version);
-                        else
-                            rc = mdbx_put(txn, dw->dbi, &action->key, &action->data, (MDBX_put_flags_t) putFlags);
-                    }
-                    if (rc != 0) {
-                        if (rc == MDBX_BAD_VALSIZE) {
-                            results[i] = BAD_KEY;
-                            rc = 0;
-                        } else {
-                            mdbx_txn_abort(txn);
-                            return SetErrorMessage(mdbx_strerror(rc));
-                        }
-                    }
-                }
-                if (action->freeValue) {
-                    action->freeValue(action->data);
-                }
-            } else {
-                // starting condition branch
-                conditionDepth++;
-                if (validated)
-                    validatedDepth++;
-            }
-            i++;
-        }
-
-        rc = mdbx_txn_commit(txn);
-        if (rc != 0) {
-            if ((putFlags & 1) > 0) // sync mode
-                return Nan::ThrowError(mdbx_strerror(rc));
-            else
-                return SetErrorMessage(mdbx_strerror(rc));
-        }
-    }
-
-   
-    void HandleOKCallback() {
-        Nan::HandleScope scope;
-        Local<v8::Value> argv[] = {
-            Nan::Null()
-        };
-
-        callback->Call(1, argv, async_resource);
-    }
-
-  private:
-    MDBX_env* env;
-    int actionCount;
-    uint8_t* results;
-    int resultIndex = 0;
-    bool hasResultsArray = false;
-    action_t* actions;
-    int putFlags;
-    KeySpace* keySpace;
-    friend class DbiWrap;
-};
-
+void cleanup(void* data) {
+    ((EnvWrap*) data)->closeEnv();
+}
 
 NAN_METHOD(EnvWrap::open) {
     Nan::HandleScope scope;
 
     int rc;
     MDBX_env_flags_t flags = MDBX_ENV_DEFAULTS;
+    int jsFlags = 0;
 
     // Get the wrapper
     EnvWrap *ew = Nan::ObjectWrap::Unwrap<EnvWrap>(info.This());
@@ -371,19 +176,28 @@ NAN_METHOD(EnvWrap::open) {
     if (!ew->env) {
         return Nan::ThrowError("The environment is already closed.");
     }
-    ew->compression = nullptr;
-
     Local<Object> options = Local<Object>::Cast(info[0]);
+    ew->compression = nullptr;
+    Local<Value> compressionOption = options->Get(Nan::GetCurrentContext(), Nan::New<String>("compression").ToLocalChecked()).ToLocalChecked();
+    if (compressionOption->IsObject()) {
+        ew->compression = Nan::ObjectWrap::Unwrap<Compression>(Nan::To<Object>(compressionOption).ToLocalChecked());
+        ew->compression->Ref();
+    }
+    Local<Value> keyBytesValue = options->Get(Nan::GetCurrentContext(), Nan::New<String>("keyBytes").ToLocalChecked()).ToLocalChecked();
+    if (keyBytesValue->IsArrayBufferView())
+        ew->keyBuffer = node::Buffer::Data(keyBytesValue);
+    setFlagFromValue(&jsFlags, SEPARATE_FLUSHED, "separateFlushed", false, options);
+    ew->jsFlags = jsFlags;
     Local<String> path = Local<String>::Cast(options->Get(Nan::GetCurrentContext(), Nan::New<String>("path").ToLocalChecked()).ToLocalChecked());
     Nan::Utf8String charPath(path);
-    uv_mutex_lock(envsLock);
+    pthread_mutex_lock(envsLock);
     for (env_path_t envPath : envs) {
         char* existingPath = envPath.path;
         if (!strcmp(existingPath, *charPath)) {
             envPath.count++;
             mdbx_env_close(ew->env);
             ew->env = envPath.env;
-            uv_mutex_unlock(envsLock);
+            pthread_mutex_unlock(envsLock);
             return;
         }
     }
@@ -391,7 +205,7 @@ NAN_METHOD(EnvWrap::open) {
     // Parse the maxDbs option
     rc = applyUint32Setting<unsigned>(&mdbx_env_set_maxdbs, ew->env, options, 1, "maxDbs");
     if (rc != 0) {
-        uv_mutex_unlock(envsLock);
+        pthread_mutex_unlock(envsLock);
         return throwLmdbxError(rc);
     }
 
@@ -401,14 +215,9 @@ NAN_METHOD(EnvWrap::open) {
         intptr_t mapSizeSizeT = mapSizeOption->NumberValue(Nan::GetCurrentContext()).FromJust();
         rc = mdbx_env_set_geometry(ew->env, -1, -1, mapSizeSizeT, -1, -1, -1);
         if (rc != 0) {
-            uv_mutex_unlock(envsLock);
+            pthread_mutex_unlock(envsLock);
             return throwLmdbxError(rc);
         }
-    }
-    Local<Value> compressionOption = options->Get(Nan::GetCurrentContext(), Nan::New<String>("compression").ToLocalChecked()).ToLocalChecked();
-    if (compressionOption->IsObject()) {
-        ew->compression = Nan::ObjectWrap::Unwrap<Compression>(Nan::To<Object>(compressionOption).ToLocalChecked());
-        ew->compression->Ref();
     }
 
     // Parse the maxReaders option
@@ -452,12 +261,13 @@ NAN_METHOD(EnvWrap::open) {
         ew->env = nullptr;
         return throwLmdbxError(rc);
     }
+    node::AddEnvironmentCleanupHook(Isolate::GetCurrent(), cleanup, ew);
     env_path_t envPath;
     envPath.path = strdup(*charPath);
     envPath.env = ew->env;
     envPath.count = 1;
     envs.push_back(envPath);
-    uv_mutex_unlock(envsLock);
+    pthread_mutex_unlock(envsLock);
 }
 
 NAN_METHOD(EnvWrap::resize) {
@@ -498,6 +308,27 @@ NAN_METHOD(EnvWrap::resize) {
     }
 }
 
+void EnvWrap::closeEnv() {
+    cleanupStrayTxns();
+
+    pthread_mutex_lock(envsLock);
+    for (auto envPath = envs.begin(); envPath != envs.end(); ) {
+        if (envPath->env == env) {
+            envPath->count--;
+            if (envPath->count <= 0) {
+                // last thread using it, we can really close it now
+                envs.erase(envPath);
+                mdbx_env_close(env);
+            }
+            break;
+        }
+        ++envPath;
+    }
+    pthread_mutex_unlock(envsLock);
+
+    env = nullptr;
+
+}
 NAN_METHOD(EnvWrap::close) {
     EnvWrap *ew = Nan::ObjectWrap::Unwrap<EnvWrap>(info.This());
     ew->Unref();
@@ -505,24 +336,7 @@ NAN_METHOD(EnvWrap::close) {
     if (!ew->env) {
         return Nan::ThrowError("The environment is already closed.");
     }
-    ew->cleanupStrayTxns();
-
-    uv_mutex_lock(envsLock);
-    for (auto envPath = envs.begin(); envPath != envs.end(); ) {
-        if (envPath->env == ew->env) {
-            envPath->count--;
-            if (envPath->count <= 0) {
-                // last thread using it, we can really close it now
-                envs.erase(envPath);
-                mdbx_env_close(ew->env);
-            }
-            break;
-        }
-        ++envPath;
-    }
-    uv_mutex_unlock(envsLock);
-
-    ew->env = nullptr;
+    ew->closeEnv();
 }
 
 NAN_METHOD(EnvWrap::stat) {
@@ -618,6 +432,49 @@ NAN_METHOD(EnvWrap::info) {
     info.GetReturnValue().Set(obj);
 }
 
+NAN_METHOD(EnvWrap::readerCheck) {
+    Nan::HandleScope scope;
+
+    // Get the wrapper
+    EnvWrap *ew = Nan::ObjectWrap::Unwrap<EnvWrap>(info.This());
+    if (!ew->env) {
+        return Nan::ThrowError("The environment is already closed.");
+    }
+
+    int rc, dead;
+    rc = mdbx_reader_check(ew->env, &dead);
+    if (rc != 0) {
+        return throwLmdbxError(rc);
+    }
+
+    info.GetReturnValue().Set(Nan::New<Number>(dead));
+}
+
+/*Local<Array> readerStrings;
+MDBX_msg_func* printReaders = ([](const char* message, void* ctx) -> int {
+    readerStrings->Set(Nan::GetCurrentContext(), readerStrings->Length(), Nan::New<String>(message).ToLocalChecked()).ToChecked();
+    return 0;
+});*/
+
+NAN_METHOD(EnvWrap::readerList) {
+    /*Nan::HandleScope scope;
+
+    // Get the wrapper
+    EnvWrap* ew = Nan::ObjectWrap::Unwrap<EnvWrap>(info.This());
+    if (!ew->env) {
+        return Nan::ThrowError("The environment is already closed.");
+    }
+
+    readerStrings = Nan::New<Array>(0);
+    int rc;
+    rc = mdbx_reader_list(ew->env, printReaders, nullptr);
+    if (rc != 0) {
+        return throwLmdbxError(rc);
+    }
+    info.GetReturnValue().Set(readerStrings);*/
+}
+
+
 NAN_METHOD(EnvWrap::copy) {
     /*Nan::HandleScope scope;
 
@@ -663,10 +520,62 @@ NAN_METHOD(EnvWrap::detachBuffer) {
 NAN_METHOD(EnvWrap::beginTxn) {
     Nan::HandleScope scope;
 
-    const int argc = 2;
+    Nan::MaybeLocal<Object> maybeInstance;
 
-    Local<Value> argv[argc] = { info.This(), info[0] };
-    Nan::MaybeLocal<Object> maybeInstance = Nan::NewInstance(Nan::New(*txnCtor), argc, argv);
+    int flags = info[0]->IntegerValue(Nan::GetCurrentContext()).FromJust();
+    if (!(flags & MDBX_RDONLY)) {
+        //fprintf(stderr, "begin sync txn %i\n", flags);
+        EnvWrap *ew = Nan::ObjectWrap::Unwrap<EnvWrap>(info.This());
+        MDBX_env *env = ew->env;
+        unsigned int envFlags;
+        mdbx_env_get_flags(env, &envFlags);
+        MDBX_txn *txn;
+
+        if (ew->writeTxn)
+            txn = ew->writeTxn->txn;
+        else if (ew->writeWorker) {
+            // try to acquire the txn from the current batch
+            txn = ew->writeWorker->AcquireTxn(&flags);
+            //fprintf(stderr, "acquired %p %p %p\n", ew->writeWorker, txn, flags);
+        } else {
+            pthread_mutex_lock(ew->writingLock);
+            txn = nullptr;
+        }
+
+        if (txn) {
+            if (flags & TXN_ABORTABLE) {
+                if (envFlags & MDBX_WRITEMAP)
+                    flags &= ~TXN_ABORTABLE;
+                else {
+                    // child txn
+                    mdbx_txn_begin(env, txn, (MDBX_txn_flags_t)(flags & 0xf0000), &txn);
+                    TxnTracked* childTxn = new TxnTracked(txn, flags);
+                    childTxn->parent = ew->writeTxn;
+                    ew->writeTxn = childTxn;
+                    return;
+                }
+            }
+        } else {
+            mdbx_txn_begin(env, nullptr, (MDBX_txn_flags_t)(flags & 0xf0000), &txn);
+            flags |= TXN_ABORTABLE;
+        }
+        ew->writeTxn = new TxnTracked(txn, flags);
+        return;
+    }
+
+    if (info.Length() > 1) {
+        const int argc = 3;
+
+        Local<Value> argv[argc] = { info.This(), info[0], info[1] };
+        maybeInstance = Nan::NewInstance(Nan::New(*txnCtor), argc, argv);
+
+    } else {
+        const int argc = 2;
+
+        Local<Value> argv[argc] = { info.This(), info[0] };
+        //fprintf(stdout, "beginTxn %u", info[0]->IsTrue());
+        maybeInstance = Nan::NewInstance(Nan::New(*txnCtor), argc, argv);
+    }
 
     // Check if txn could be created
     if ((maybeInstance.IsEmpty())) {
@@ -677,6 +586,47 @@ NAN_METHOD(EnvWrap::beginTxn) {
 
     Local<Object> instance = maybeInstance.ToLocalChecked();
     info.GetReturnValue().Set(instance);
+}
+NAN_METHOD(EnvWrap::commitTxn) {
+    EnvWrap *ew = Nan::ObjectWrap::Unwrap<EnvWrap>(info.This());
+    TxnTracked *currentTxn = ew->writeTxn;
+    //fprintf(stderr, "commitTxn %p\n", currentTxn);
+    int rc = 0;
+    if (currentTxn->flags & TXN_ABORTABLE) {
+        //fprintf(stderr, "txn_commit\n");
+        rc = mdbx_txn_commit(currentTxn->txn);
+    }
+    ew->writeTxn = currentTxn->parent;
+    if (!ew->writeTxn) {
+        //fprintf(stderr, "unlock txn\n");
+        if (ew->writeWorker)
+            ew->writeWorker->UnlockTxn();
+        else
+            pthread_mutex_unlock(ew->writingLock);
+    }
+    delete currentTxn;
+    if (rc)
+        throwLmdbxError(rc);
+}
+NAN_METHOD(EnvWrap::abortTxn) {
+    EnvWrap *ew = Nan::ObjectWrap::Unwrap<EnvWrap>(info.This());
+    TxnTracked *currentTxn = ew->writeTxn;
+    //fprintf(stderr, "abortTxn\n");
+    if (currentTxn->flags & TXN_ABORTABLE) {
+        //fprintf(stderr, "txn_abort\n");
+        mdbx_txn_abort(currentTxn->txn);
+    } else {
+        Nan::ThrowError("Can not abort this transaction");
+    }
+    ew->writeTxn = currentTxn->parent;
+    if (!ew->writeTxn) {
+        //fprintf(stderr, "unlock txn\n");
+        if (ew->writeWorker)
+            ew->writeWorker->UnlockTxn();
+        else
+            pthread_mutex_unlock(ew->writingLock);
+    }
+    delete currentTxn;
 }
 
 NAN_METHOD(EnvWrap::openDbi) {
@@ -718,158 +668,11 @@ NAN_METHOD(EnvWrap::sync) {
     return;
 }
 
-
-NAN_METHOD(EnvWrap::batchWrite) {
-    Nan::HandleScope scope;
-
-    EnvWrap *ew = Nan::ObjectWrap::Unwrap<EnvWrap>(info.This());
-    Local<Context> context = Nan::GetCurrentContext();
-
-    if (!ew->env) {
-        return Nan::ThrowError("The environment is already closed.");
-    }
-    Local<v8::Array> array = Local<v8::Array>::Cast(info[0]);
-
-    int length = array->Length();
-    action_t* actions = new action_t[length];
-
-    MDBX_put_flags_t putFlags = MDBX_UPSERT;
-    KeySpace* keySpace = new KeySpace(false);
-    Nan::Callback* callback;
-    uint8_t* results = (uint8_t*) node::Buffer::Data(Local<Object>::Cast(info[1]));
-    Local<Value> options = info[2];
-
-    if (!info[2]->IsNull() && !info[2]->IsUndefined() && info[2]->IsObject() && !info[2]->IsFunction()) {
-        Local<Object> optionsObject = Local<Object>::Cast(options);
-        setFlagFromValue((int*) &putFlags, (int) MDBX_NODUPDATA, "noDupData", false, optionsObject);
-        setFlagFromValue((int*) &putFlags, (int) MDBX_NOOVERWRITE, "noOverwrite", false, optionsObject);
-        setFlagFromValue((int*) &putFlags, (int) MDBX_APPEND, "append", false, optionsObject);
-        setFlagFromValue((int*) &putFlags, (int) MDBX_APPENDDUP, "appendDup", false, optionsObject);
-        callback = new Nan::Callback(
-            Local<v8::Function>::Cast(info[3])
-        );
-    } else {
-        if (info.Length() > 2 || info[0]->IsFunction())
-            callback = new Nan::Callback(
-                Local<v8::Function>::Cast(info[2])
-            );
-        else {
-            // sync mode
-            //putFlags &= ;
-            callback = nullptr;
-        }
-    }
-
-    BatchWorker* worker = new BatchWorker(
-        ew->env, actions, length, putFlags, keySpace, results, callback
-    );
-    bool keyIsValid = false;
-    NodeLmdbxKeyType keyType;
-    DbiWrap* dw;
-
-    for (unsigned int i = 0; i < array->Length(); i++) {
-        //Local<Value> element = array->Get(context, i).ToLocalChecked(); // checked/enforce in js
-        //if (!element->IsObject())
-          //  continue;
-        action_t* action = &actions[i];
-        Local<Value> operationValue = array->Get(context, i).ToLocalChecked();
-
-        bool isArray = operationValue->IsArray();
-        if (!isArray) {
-            // change target db
-            if (operationValue->IsObject()) {
-                dw = action->dw = Nan::ObjectWrap::Unwrap<DbiWrap>(Local<Object>::Cast(operationValue));
-                action->actionType = CHANGE_DB;
-            } else {
-                // reset condition
-                action->actionType = RESET_CONDITION;
-            }
-            continue;
-            // if we did not coordinate to always reference the object on the JS side, we would need this (but it is expensive):
-            // worker->SaveToPersistent(persistedIndex++, currentDb);
-        }
-        Local<Object> operation = Local<Object>::Cast(operationValue);
-        Local<v8::Value> key = operation->Get(context, 0).ToLocalChecked();
-        
-        if (!keyIsValid) {
-            // just execute this the first time so we didn't need to re-execute for each iteration
-            keyType = keyTypeFromOptions(options, dw->keyType);
-        }
-        if (keyType == NodeLmdbxKeyType::DefaultKey) {
-            keyIsValid = valueToMDBXKey(key, action->key, *keySpace);
-        }
-        else {
-            argToKey(key, action->key, keyType, keyIsValid);
-            if (!keyIsValid) {
-                // argToKey already threw an error
-                delete worker;
-                return;
-            }
-        }
-        // if we did not coordinate to always reference the object on the JS side, we would need this (but it is expensive):
-        //if (!action->freeKey)
-          //  worker->SaveToPersistent(persistedIndex++, key);
-        Local<v8::Value> value = operation->Get(context, 1).ToLocalChecked();
-
-        if (dw->hasVersions) {
-            if (value->IsNumber()) {
-                action->actionType = CONDITION; // checking version action type
-                action->ifVersion = Nan::To<v8::Number>(value).ToLocalChecked()->Value();
-                continue;
-            }
-            action->actionType = CONDITION | WRITE_WITH_VALUE; // conditional save value
-            // TODO: Check length before continuing?
-            double version = 0;
-            Local<v8::Value> versionValue = operation->Get(context, 2).ToLocalChecked();
-            if (versionValue->IsNumber())
-                version = Nan::To<v8::Number>(versionValue).ToLocalChecked()->Value();
-            action->version = version;
-
-            versionValue = operation->Get(context, 3).ToLocalChecked();
-            if (versionValue->IsNumber())
-                version = Nan::To<v8::Number>(versionValue).ToLocalChecked()->Value();
-            else if (versionValue->IsNull())
-                version = NO_EXIST_VERSION;
-            else
-                action->actionType = WRITE_WITH_VALUE;
-            action->ifVersion = version;
-        } else {
-            Local<v8::Value> deleteValue = operation->Get(context, 2).ToLocalChecked();
-            if (deleteValue->IsTrue()) // useful for dupsort so we can specify a specfic value to delete
-                action->actionType = DELETE_OPERATION | WRITE_WITH_VALUE;
-            else
-                action->actionType = WRITE_WITH_VALUE;
-        }
-
-        if (value->IsNull() || value->IsUndefined()) {
-            // standard delete (no regard for value)
-            action->actionType = DELETE_OPERATION | (action->actionType & CONDITION); // only DELETE_OPERATION, no WRITE_WITH_VALUE
-            action->freeValue = nullptr;
-        } else if (value->IsArrayBufferView()) {
-            action->data.iov_len = node::Buffer::Length(value);
-            action->data.iov_base = node::Buffer::Data(value);
-            action->freeValue = nullptr; // don't free, belongs to node
-            //worker->SaveToPersistent(persistedIndex++, value); // this is coordinated to always be referenced on the JS side
-        } else {
-            writeValueToEntry(Nan::To<v8::String>(value).ToLocalChecked(), &action->data);
-            action->freeValue = ([](MDBX_val &value) -> void {
-                delete[] (char*)value.iov_base;
-            });
-        }
-    }
-
-    //worker->SaveToPersistent("env", info.This()); // this is coordinated to always be referenced on the JS side
-    if (callback) {
-        Nan::AsyncQueueWorker(worker);
-    } else {
-        // sync mode
-        worker->Execute();
-        delete worker;
-    }
-    return;
+NAN_METHOD(EnvWrap::resetCurrentReadTxn) {
+    EnvWrap* ew = Nan::ObjectWrap::Unwrap<EnvWrap>(info.This());
+    mdbx_txn_reset(ew->currentReadTxn);
+    ew->readTxnRenewed = false;
 }
-
-
 
 void EnvWrap::setupExports(Local<Object> exports) {
     // EnvWrap: Prepare constructor template
@@ -881,15 +684,21 @@ void EnvWrap::setupExports(Local<Object> exports) {
     envTpl->PrototypeTemplate()->Set(isolate, "open", Nan::New<FunctionTemplate>(EnvWrap::open));
     envTpl->PrototypeTemplate()->Set(isolate, "close", Nan::New<FunctionTemplate>(EnvWrap::close));
     envTpl->PrototypeTemplate()->Set(isolate, "beginTxn", Nan::New<FunctionTemplate>(EnvWrap::beginTxn));
+    envTpl->PrototypeTemplate()->Set(isolate, "commitTxn", Nan::New<FunctionTemplate>(EnvWrap::commitTxn));
+    envTpl->PrototypeTemplate()->Set(isolate, "abortTxn", Nan::New<FunctionTemplate>(EnvWrap::abortTxn));
     envTpl->PrototypeTemplate()->Set(isolate, "openDbi", Nan::New<FunctionTemplate>(EnvWrap::openDbi));
     envTpl->PrototypeTemplate()->Set(isolate, "sync", Nan::New<FunctionTemplate>(EnvWrap::sync));
-    envTpl->PrototypeTemplate()->Set(isolate, "batchWrite", Nan::New<FunctionTemplate>(EnvWrap::batchWrite));
+    envTpl->PrototypeTemplate()->Set(isolate, "startWriting", Nan::New<FunctionTemplate>(EnvWrap::startWriting));
+    envTpl->PrototypeTemplate()->Set(isolate, "compress", Nan::New<FunctionTemplate>(EnvWrap::compress));
     envTpl->PrototypeTemplate()->Set(isolate, "stat", Nan::New<FunctionTemplate>(EnvWrap::stat));
     envTpl->PrototypeTemplate()->Set(isolate, "freeStat", Nan::New<FunctionTemplate>(EnvWrap::freeStat));
     envTpl->PrototypeTemplate()->Set(isolate, "info", Nan::New<FunctionTemplate>(EnvWrap::info));
+    envTpl->PrototypeTemplate()->Set(isolate, "readerCheck", Nan::New<FunctionTemplate>(EnvWrap::readerCheck));
+    envTpl->PrototypeTemplate()->Set(isolate, "readerList", Nan::New<FunctionTemplate>(EnvWrap::readerList));
     envTpl->PrototypeTemplate()->Set(isolate, "resize", Nan::New<FunctionTemplate>(EnvWrap::resize));
     envTpl->PrototypeTemplate()->Set(isolate, "copy", Nan::New<FunctionTemplate>(EnvWrap::copy));
     envTpl->PrototypeTemplate()->Set(isolate, "detachBuffer", Nan::New<FunctionTemplate>(EnvWrap::detachBuffer));
+    envTpl->PrototypeTemplate()->Set(isolate, "resetCurrentReadTxn", Nan::New<FunctionTemplate>(EnvWrap::resetCurrentReadTxn));
 
     // TxnWrap: Prepare constructor template
     Local<FunctionTemplate> txnTpl = Nan::New<FunctionTemplate>(TxnWrap::ctor);
@@ -898,19 +707,6 @@ void EnvWrap::setupExports(Local<Object> exports) {
     // TxnWrap: Add functions to the prototype
     txnTpl->PrototypeTemplate()->Set(isolate, "commit", Nan::New<FunctionTemplate>(TxnWrap::commit));
     txnTpl->PrototypeTemplate()->Set(isolate, "abort", Nan::New<FunctionTemplate>(TxnWrap::abort));
-    txnTpl->PrototypeTemplate()->Set(isolate, "getString", Nan::New<FunctionTemplate>(TxnWrap::getString));
-    txnTpl->PrototypeTemplate()->Set(isolate, "getStringUnsafe", Nan::New<FunctionTemplate>(TxnWrap::getStringUnsafe));
-    txnTpl->PrototypeTemplate()->Set(isolate, "getUtf8", Nan::New<FunctionTemplate>(TxnWrap::getUtf8));
-    txnTpl->PrototypeTemplate()->Set(isolate, "getBinary", Nan::New<FunctionTemplate>(TxnWrap::getBinary));
-    txnTpl->PrototypeTemplate()->Set(isolate, "getBinaryUnsafe", Nan::New<FunctionTemplate>(TxnWrap::getBinaryUnsafe));
-    txnTpl->PrototypeTemplate()->Set(isolate, "getNumber", Nan::New<FunctionTemplate>(TxnWrap::getNumber));
-    txnTpl->PrototypeTemplate()->Set(isolate, "getBoolean", Nan::New<FunctionTemplate>(TxnWrap::getBoolean));
-    txnTpl->PrototypeTemplate()->Set(isolate, "putString", Nan::New<FunctionTemplate>(TxnWrap::putString));
-    txnTpl->PrototypeTemplate()->Set(isolate, "putBinary", Nan::New<FunctionTemplate>(TxnWrap::putBinary));
-    txnTpl->PrototypeTemplate()->Set(isolate, "putNumber", Nan::New<FunctionTemplate>(TxnWrap::putNumber));
-    txnTpl->PrototypeTemplate()->Set(isolate, "putBoolean", Nan::New<FunctionTemplate>(TxnWrap::putBoolean));
-    txnTpl->PrototypeTemplate()->Set(isolate, "putUtf8", Nan::New<FunctionTemplate>(TxnWrap::putUtf8));
-    txnTpl->PrototypeTemplate()->Set(isolate, "del", Nan::New<FunctionTemplate>(TxnWrap::del));
     txnTpl->PrototypeTemplate()->Set(isolate, "reset", Nan::New<FunctionTemplate>(TxnWrap::reset));
     txnTpl->PrototypeTemplate()->Set(isolate, "renew", Nan::New<FunctionTemplate>(TxnWrap::renew));
     // TODO: wrap mdbx_cmp too
@@ -927,6 +723,32 @@ void EnvWrap::setupExports(Local<Object> exports) {
     dbiTpl->PrototypeTemplate()->Set(isolate, "close", Nan::New<FunctionTemplate>(DbiWrap::close));
     dbiTpl->PrototypeTemplate()->Set(isolate, "drop", Nan::New<FunctionTemplate>(DbiWrap::drop));
     dbiTpl->PrototypeTemplate()->Set(isolate, "stat", Nan::New<FunctionTemplate>(DbiWrap::stat));
+    #if ENABLE_FAST_API && NODE_VERSION_AT_LEAST(16,6,0)
+    auto getFast = CFunction::Make(DbiWrap::getByBinaryFast);
+    dbiTpl->PrototypeTemplate()->Set(isolate, "getByBinary", v8::FunctionTemplate::New(
+          isolate, DbiWrap::getByBinary, v8::Local<v8::Value>(),
+          v8::Local<v8::Signature>(), 0, v8::ConstructorBehavior::kThrow,
+          v8::SideEffectType::kHasNoSideEffect, &getFast));
+    auto writeFast = CFunction::Make(EnvWrap::writeFast);
+    envTpl->PrototypeTemplate()->Set(isolate, "write", v8::FunctionTemplate::New(
+        isolate, EnvWrap::write, v8::Local<v8::Value>(),
+        v8::Local<v8::Signature>(), 0, v8::ConstructorBehavior::kThrow,
+        v8::SideEffectType::kHasNoSideEffect, &writeFast));
+
+    #else
+    dbiTpl->PrototypeTemplate()->Set(isolate, "getByBinary", v8::FunctionTemplate::New(
+          isolate, DbiWrap::getByBinary, v8::Local<v8::Value>(),
+          v8::Local<v8::Signature>(), 0, v8::ConstructorBehavior::kThrow,
+          v8::SideEffectType::kHasNoSideEffect));
+    envTpl->PrototypeTemplate()->Set(isolate, "write", v8::FunctionTemplate::New(
+        isolate, EnvWrap::write, v8::Local<v8::Value>(),
+        v8::Local<v8::Signature>(), 0, v8::ConstructorBehavior::kThrow,
+        v8::SideEffectType::kHasNoSideEffect));
+    #endif
+    dbiTpl->PrototypeTemplate()->Set(isolate, "getStringByBinary", Nan::New<FunctionTemplate>(DbiWrap::getStringByBinary));
+    dbiTpl->PrototypeTemplate()->Set(isolate, "stat", Nan::New<FunctionTemplate>(DbiWrap::stat));
+
+
     // TODO: wrap mdbx_stat too
     // DbiWrap: Get constructor
     EnvWrap::dbiCtor = new Nan::Persistent<Function>();
@@ -935,8 +757,45 @@ void EnvWrap::setupExports(Local<Object> exports) {
     Local<FunctionTemplate> compressionTpl = Nan::New<FunctionTemplate>(Compression::ctor);
     compressionTpl->SetClassName(Nan::New<String>("Compression").ToLocalChecked());
     compressionTpl->InstanceTemplate()->SetInternalFieldCount(1);
+    compressionTpl->PrototypeTemplate()->Set(isolate, "setBuffer", Nan::New<FunctionTemplate>(Compression::setBuffer));
     (void)exports->Set(Nan::GetCurrentContext(), Nan::New<String>("Compression").ToLocalChecked(), compressionTpl->GetFunction(Nan::GetCurrentContext()).ToLocalChecked());
 
     // Set exports
     (void)exports->Set(Nan::GetCurrentContext(), Nan::New<String>("Env").ToLocalChecked(), envTpl->GetFunction(Nan::GetCurrentContext()).ToLocalChecked());
 }
+
+#ifdef _WIN32
+#define EXTERN __declspec(dllexport)
+# else
+#define EXTERN __attribute__((visibility("default")))
+#endif
+extern "C" EXTERN size_t envOpen(uint32_t flags, const uint8_t * path, size_t length);
+size_t envOpen(uint32_t flags, const uint8_t * path, size_t length) {
+//	fprintf(stderr, "start!! %p %u\n", path, length);
+    EnvWrap* ew = new EnvWrap();
+    return (size_t) ew;
+}
+
+// This file contains code from the node-lmdb project
+// Copyright (c) 2013-2017 Timur Kristóf
+// Copyright (c) 2021 Kristopher Tate
+// Licensed to you under the terms of the MIT license
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+

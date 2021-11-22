@@ -1,34 +1,9 @@
-
-// This file is part of node-lmdbx, the Node.js binding for lmdbx
-// Copyright (c) 2013-2017 Timur Kristóf
-// Copyright (c) 2021 Kristopher Tate
-// Licensed to you under the terms of the MIT license
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
-#include "node-lmdbx.h"
+#include "lmdbx-js.h"
 #include <string.h>
 #include <stdio.h>
 
 static thread_local char* globalUnsafePtr;
 static thread_local size_t globalUnsafeSize;
-static thread_local Persistent<Object>* globalUnsafeBuffer;
 
 void setupExportMisc(Local<Object> exports) {
     Local<Object> versionObj = Nan::New<Object>();
@@ -40,15 +15,19 @@ void setupExportMisc(Local<Object> exports) {
     (void)versionObj->Set(context, Nan::New<String>("major").ToLocalChecked(), Nan::New<Integer>(major));
     (void)versionObj->Set(context, Nan::New<String>("minor").ToLocalChecked(), Nan::New<Integer>(minor));
     (void)versionObj->Set(context, Nan::New<String>("patch").ToLocalChecked(), Nan::New<Integer>(patch));
-    (void)exports->Set(context, Nan::New<String>("version").ToLocalChecked(), versionObj);*/
-    Nan::SetMethod(exports, "getLastVersion", getLastVersion);
-    Nan::SetMethod(exports, "setLastVersion", setLastVersion);
-    Nan::SetMethod(exports, "bufferToKeyValue", bufferToKeyValue);
-    Nan::SetMethod(exports, "keyValueToBuffer", keyValueToBuffer);
-    globalUnsafeBuffer = new Persistent<Object>();
-    makeGlobalUnsafeBuffer(8);
-    fixedKeySpace = new KeySpace(true);
+*/
+    Local<Context> context = Nan::GetCurrentContext();
+    (void)exports->Set(context, Nan::New<String>("version").ToLocalChecked(), versionObj);
+    Nan::SetMethod(exports, "setGlobalBuffer", setGlobalBuffer);
+    Nan::SetMethod(exports, "lmdbxError", lmdbxError);
+    //Nan::SetMethod(exports, "getBufferForAddress", getBufferForAddress);
+    Nan::SetMethod(exports, "getAddress", getAddress);
+    Nan::SetMethod(exports, "getAddressShared", getAddressShared);
+    // this is set solely for the purpose of giving a good name to the set of native functions for the profiler since V8
+    // just uses the name of the last exported native function:
+    Nan::SetMethod(exports, "lmdbxNativeFunctions", getAddress);
 }
+
 
 void setFlagFromValue(int *flags, int flag, const char *name, bool defaultValue, Local<Object> options) {
     Local<Context> context = Nan::GetCurrentContext();
@@ -100,113 +79,6 @@ NodeLmdbxKeyType keyTypeFromOptions(const Local<Value> &val, NodeLmdbxKeyType de
     
     return keyType;
 }
-
-NodeLmdbxKeyType inferKeyType(const Local<Value> &val) {
-    if (val->IsString()) {
-        return NodeLmdbxKeyType::StringKey;
-    }
-    if (val->IsUint32()) {
-        return NodeLmdbxKeyType::Uint32Key;
-    }
-    if (node::Buffer::HasInstance(val)) {
-        return NodeLmdbxKeyType::BinaryKey;
-    }
-    
-    return NodeLmdbxKeyType::InvalidKey;
-}
-
-NodeLmdbxKeyType inferAndValidateKeyType(const Local<Value> &key, const Local<Value> &options, NodeLmdbxKeyType dbiKeyType, bool &isValid) {
-    auto keyType = keyTypeFromOptions(options, NodeLmdbxKeyType::DefaultKey);
-    auto inferredKeyType = inferKeyType(key);
-    isValid = false;
-    
-    if (keyType != NodeLmdbxKeyType::DefaultKey && inferredKeyType != keyType) {
-        Nan::ThrowError("Specified key type doesn't match the key you gave.");
-        return NodeLmdbxKeyType::InvalidKey;
-    }
-    else {
-        keyType = inferredKeyType;
-    }
-    if (dbiKeyType == NodeLmdbxKeyType::Uint32Key && keyType != NodeLmdbxKeyType::Uint32Key) {
-        Nan::ThrowError("You specified keyIsUint32 on the Dbi, so you can't use other key types with it.");
-        return NodeLmdbxKeyType::InvalidKey;
-    }
-    
-    isValid = true;
-    return keyType;
-}
-
-argtokey_callback_t argToKey(const Local<Value> &val, MDBX_val &key, NodeLmdbxKeyType keyType, bool &isValid) {
-    isValid = false;
-
-    if (keyType == NodeLmdbxKeyType::DefaultKey) {
-        isValid = valueToMDBXKey(val, key, *fixedKeySpace);
-    } else if (keyType == NodeLmdbxKeyType::StringKey) {
-        if (!val->IsString()) {
-            Nan::ThrowError("Invalid key. Should be a string. (Specified with env.openDbi)");
-            return nullptr;
-        }
-        
-        isValid = true;
-        CustomExternalStringResource::writeTo(Local<String>::Cast(val), &key);
-        return ([](MDBX_val &key) -> void {
-            delete[] (uint16_t*)key.iov_base;
-        });
-    }
-    else if (keyType == NodeLmdbxKeyType::Uint32Key) {
-        if (!val->IsUint32()) {
-            Nan::ThrowError("Invalid key. Should be an unsigned 32-bit integer. (Specified with env.openDbi)");
-            return nullptr;
-        }
-        
-        isValid = true;
-        uint32_t* uint32Key = new uint32_t;
-        *uint32Key = val->Uint32Value(Nan::GetCurrentContext()).FromJust();
-        key.iov_len = sizeof(uint32_t);
-        key.iov_base = uint32Key;
-
-        return ([](MDBX_val &key) -> void {
-            delete (uint32_t*)key.iov_base;
-        });
-    }
-    else if (keyType == NodeLmdbxKeyType::BinaryKey) {
-        if (!node::Buffer::HasInstance(val)) {
-            Nan::ThrowError("Invalid key. Should be a Buffer. (Specified with env.openDbi)");
-            return nullptr;
-        }
-        
-        isValid = true;
-        key.iov_len = node::Buffer::Length(val);
-        key.iov_base = node::Buffer::Data(val);
-        
-        return nullptr;
-    }
-    else if (keyType == NodeLmdbxKeyType::InvalidKey) {
-        Nan::ThrowError("Invalid key type. This might be a bug in node-lmdbx.");
-    }
-    else {
-        Nan::ThrowError("Unknown key type. This is a bug in node-lmdbx.");
-    }
-
-    return nullptr;
-}
-
-Local<Value> keyToHandle(MDBX_val &key, NodeLmdbxKeyType keyType) {
-    switch (keyType) {
-    case NodeLmdbxKeyType::DefaultKey:
-        return MDBXKeyToValue(key);
-    case NodeLmdbxKeyType::Uint32Key:
-        return Nan::New<Integer>(*((uint32_t*)key.iov_base));
-    case NodeLmdbxKeyType::BinaryKey:
-        return valToBinary(key);
-    case NodeLmdbxKeyType::StringKey:
-        return valToString(key);
-    default:
-        Nan::ThrowError("Unknown key type. This is a bug in node-lmdbx.");
-        return Nan::Undefined();
-    }
-}
-
 Local<Value> valToStringUnsafe(MDBX_val &data) {
     auto resource = new CustomExternalOneByteStringResource(&data);
     auto str = Nan::New<v8::String>(resource);
@@ -242,34 +114,18 @@ Local<Value> valToString(MDBX_val &data) {
     return str.ToLocalChecked();
 }
 
-Local<Value> valToBinary(MDBX_val &data) {
-    return Nan::CopyBuffer(
-        (char*)data.iov_base,
-        data.iov_len
-    ).ToLocalChecked();
-}
-
-void makeGlobalUnsafeBuffer(size_t size) {
-    globalUnsafeSize = size;
-    Local<Object> newBuffer = Nan::NewBuffer(size).ToLocalChecked();
-    globalUnsafePtr = node::Buffer::Data(newBuffer);
-    globalUnsafeBuffer->Reset(Isolate::GetCurrent(), newBuffer);
-}
-
-Local<Value> valToBinaryUnsafe(MDBX_val &data) {
-    DbiWrap* dw = currentDb;
+bool valToBinaryFast(MDBX_val &data, DbiWrap* dw) {
     Compression* compression = dw->compression;
     if (compression) {
         if (data.iov_base == compression->decompressTarget) {
             // already decompressed to the target, nothing more to do
         } else {
             if (data.iov_len > compression->decompressSize) {
-                compression->expand(data.iov_len);
+                return false;
             }
             // copy into the buffer target
             memcpy(compression->decompressTarget, data.iov_base, data.iov_len);
         }
-        dw->setUnsafeBuffer(compression->decompressTarget, compression->unsafeBuffer);
     } else {
         if (data.iov_len > globalUnsafeSize) {
             // TODO: Provide a direct reference if for really large blocks, but we do that we need to detach that in the next turn
@@ -277,59 +133,90 @@ Local<Value> valToBinaryUnsafe(MDBX_val &data) {
                 dw->SetUnsafeBuffer(data.iov_base, data.iov_len);
                 return Nan::New<Number>(data.iov_len);
             }*/
-            makeGlobalUnsafeBuffer(data.iov_len * 2);
+            return false;
         }
         memcpy(globalUnsafePtr, data.iov_base, data.iov_len);
-        dw->setUnsafeBuffer(globalUnsafePtr, *globalUnsafeBuffer);
     }
+    return true;
+}
+Local<Value> valToBinaryUnsafe(MDBX_val &data, DbiWrap* dw) {
+    valToBinaryFast(data, dw);
     return Nan::New<Number>(data.iov_len);
 }
 
-Local<Value> valToNumber(MDBX_val &data) {
-    return Nan::New<Number>(*((double*)data.iov_base));
-}
 
-Local<Value> valToBoolean(MDBX_val &data) {
-    return Nan::New<Boolean>(*((bool*)data.iov_base));
-}
-
-Local<Value> getVersionAndUncompress(MDBX_val &data, DbiWrap* dw, Local<Value> (*successFunc)(MDBX_val&)) {
+bool getVersionAndUncompress(MDBX_val &data, DbiWrap* dw) {
     //fprintf(stdout, "uncompressing %u\n", compressionThreshold);
     unsigned char* charData = (unsigned char*) data.iov_base;
     if (dw->hasVersions) {
-        lastVersion = *((double*) charData);
+        *((double*) (dw->ew->keyBuffer + 16)) = *((double*) charData);
 //        fprintf(stderr, "getVersion %u\n", lastVersion);
         charData = charData + 8;
         data.iov_base = charData;
         data.iov_len -= 8;
     }
     if (data.iov_len == 0) {
-        currentDb = dw;
-        return successFunc(data);
+        return true;// successFunc(data);
     }
     unsigned char statusByte = dw->compression ? charData[0] : 0;
         //fprintf(stdout, "uncompressing status %X\n", statusByte);
     if (statusByte >= 250) {
         bool isValid;
-        dw->compression->decompress(data, isValid);
+        dw->compression->decompress(data, isValid, !dw->getFast);
         if (!isValid)
-            return Nan::Null();
+            return false;
+            //return Nan::Null();
     }
-    currentDb = dw;
-    return successFunc(data);
+    return true;
 }
 
-NAN_METHOD(getLastVersion) {
-    if (lastVersion == NO_EXIST_VERSION)
-        return info.GetReturnValue().Set(Nan::Null());
-    return info.GetReturnValue().Set(Nan::New<Number>(lastVersion));
+NAN_METHOD(lmdbxError) {
+    throwLmdbxError(Nan::To<v8::Number>(info[0]).ToLocalChecked()->Value());
 }
-void setLastVersion(double version) {
-    lastVersion = version;
+
+NAN_METHOD(setGlobalBuffer) {
+    globalUnsafePtr = node::Buffer::Data(info[0]);
+    globalUnsafeSize = node::Buffer::Length(info[0]);
 }
-NAN_METHOD(setLastVersion) {
-    lastVersion = Nan::To<v8::Number>(info[0]).ToLocalChecked()->Value();
+
+/*NAN_METHOD(getBufferForAddress) {
+    char* address = (char*) (size_t) Nan::To<v8::Number>(info[0]).ToLocalChecked()->Value();
+    std::unique_ptr<v8::BackingStore> backing = v8::ArrayBuffer::NewBackingStore(
+    address, 0x100000000, [](void*, size_t, void*){}, nullptr);
+    auto array_buffer = v8::ArrayBuffer::New(Isolate::GetCurrent(), std::move(backing));
+    info.GetReturnValue().Set(array_buffer);
+}*/
+NAN_METHOD(getAddress) {
+    void* address;
+    Local<ArrayBuffer> buffer = Local<ArrayBuffer>::Cast(info[0]);
+    #if _MSC_VER && NODE_RUNTIME_ELECTRON && NODE_MODULE_VERSION >= 89
+    // this is a terrible thing we have to do because of https://github.com/electron/electron/issues/29893
+    v8::Local<v8::Object> bufferView;
+    bufferView = node::Buffer::New(Isolate::GetCurrent(), buffer, 0, buffer->ByteLength()).ToLocalChecked();
+    address = node::Buffer::Data(bufferView);
+    #elif V8_MAJOR_VERSION >= 8
+    address = buffer->GetBackingStore()->Data();
+    #else
+    address = buffer->GetContents().Data();
+    #endif
+    info.GetReturnValue().Set(Nan::New<Number>((size_t) address));
 }
+NAN_METHOD(getAddressShared) {
+    void* address;
+    #if _MSC_VER && NODE_RUNTIME_ELECTRON && NODE_MODULE_VERSION >= 89
+    // this is a terrible thing we have to do because of https://github.com/electron/electron/issues/29893
+    v8::Local<v8::Object> bufferView;
+    Local<ArrayBuffer> buffer = Local<ArrayBuffer>::Cast(info[0]);
+    bufferView = node::Buffer::New(Isolate::GetCurrent(), buffer, 0, buffer->ByteLength()).ToLocalChecked();
+    address = node::Buffer::Data(bufferView);
+    #elif V8_MAJOR_VERSION >= 8
+    address = Local<SharedArrayBuffer>::Cast(info[0])->GetBackingStore()->Data();
+    #else
+    address = Local<SharedArrayBuffer>::Cast(info[0])->GetContents().Data();
+    #endif
+    info.GetReturnValue().Set(Nan::New<Number>((size_t) address));
+}
+
 
 void throwLmdbxError(int rc) {
     auto err = Nan::Error(mdbx_strerror(rc));
@@ -414,7 +301,6 @@ int putWithVersion(MDBX_txn *   txn,
     return rc;
 }
 
-
 void CustomExternalStringResource::writeTo(Local<String> str, MDBX_val *val) {
     unsigned int l = str->Length() + 1;
     uint16_t *d = new uint16_t[l];
@@ -484,3 +370,128 @@ const char *CustomExternalOneByteStringResource::data() const {
 size_t CustomExternalOneByteStringResource::length() const {
     return this->l;
 }
+
+
+#ifdef _WIN32
+
+int pthread_mutex_init(pthread_mutex_t *mutex, pthread_mutexattr_t *attr)
+{
+    (void)attr;
+
+    if (mutex == NULL)
+        return 1;
+
+    InitializeCriticalSection(mutex);
+    return 0;
+}
+
+int pthread_mutex_destroy(pthread_mutex_t *mutex)
+{
+    if (mutex == NULL)
+        return 1;
+    DeleteCriticalSection(mutex);
+    return 0;
+}
+
+int pthread_mutex_lock(pthread_mutex_t *mutex)
+{
+    if (mutex == NULL)
+        return 1;
+    EnterCriticalSection(mutex);
+    return 0;
+}
+
+int pthread_mutex_unlock(pthread_mutex_t *mutex)
+{
+    if (mutex == NULL)
+        return 1;
+    LeaveCriticalSection(mutex);
+    return 0;
+}
+
+int pthread_cond_init(pthread_cond_t *cond, pthread_condattr_t *attr)
+{
+    (void)attr;
+    if (cond == NULL)
+        return 1;
+    InitializeConditionVariable(cond);
+    return 0;
+}
+
+int pthread_cond_destroy(pthread_cond_t *cond)
+{
+    /* Windows does not have a destroy for conditionals */
+    (void)cond;
+    return 0;
+}
+
+int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
+{
+    if (cond == NULL || mutex == NULL)
+        return 1;
+    if (!SleepConditionVariableCS(cond, mutex, INFINITE))
+        return 1;
+    return 0;
+}
+
+int cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, uint64_t ms)
+{
+    if (cond == NULL || mutex == NULL)
+        return 1;
+    if (!SleepConditionVariableCS(cond, mutex, ms))
+        return 1;
+    return 0;
+}
+
+int pthread_cond_signal(pthread_cond_t *cond)
+{
+    if (cond == NULL)
+        return 1;
+    WakeConditionVariable(cond);
+    return 0;
+}
+
+int pthread_cond_broadcast(pthread_cond_t *cond)
+{
+    if (cond == NULL)
+        return 1;
+    WakeAllConditionVariable(cond);
+    return 0;
+}
+
+#else
+int cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, uint64_t cms)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    uint64_t ns = ts.tv_nsec + cms * 10000;
+    ts.tv_sec += ns / 1000000000;
+    ts.tv_nsec += ns % 1000000000;
+    return pthread_cond_timedwait(cond, mutex, &ts);
+}
+
+#endif
+
+// This file contains code from the node-lmdb project
+// Copyright (c) 2013-2017 Timur Kristóf
+// Copyright (c) 2021 Kristopher Tate
+// Licensed to you under the terms of the MIT license
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
