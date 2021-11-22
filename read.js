@@ -114,7 +114,7 @@ export function addReadMethods(LMDBStore, {
 			}
 			else if (this.useVersions) {
 				this.getBinaryFast(key);
-				return lastSize !== 0xffffffff && matches(getLastVersion(), versionOrValue);
+				return lastSize === 0xffffffff ? versionOrValue === null : getLastVersion() === versionOrValue;
 			}
 			else {
 				if (versionOrValue && versionOrValue[binaryBuffer])

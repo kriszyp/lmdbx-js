@@ -562,7 +562,7 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 				});
 			}
 			if (writeTxn) {
-				if (this.doesExist(key, version)) {
+				if (version === undefined || this.doesExist(key, version)) {
 					callback();
 					return SYNC_PROMISE_SUCCESS;
 				}
