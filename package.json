@@ -72,9 +72,9 @@
     "tsd": "^0.14.0"
   },
   "bugs": {
-    "url": "https://github.com/DoctorEvidence/lmdbx-js/issues"
+    "url": "https://github.com/kriszyp/lmdbx-js/issues"
   },
-  "homepage": "https://github.com/DoctorEvidence/lmdbx-js#readme",
+  "homepage": "https://github.com/kriszyp/lmdbx-js#readme",
   "directories": {
     "test": "tests"
   }
