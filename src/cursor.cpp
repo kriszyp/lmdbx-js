@@ -208,7 +208,7 @@ uint32_t CursorWrap::doPosition(uint32_t offset, uint32_t keySize, uint64_t endK
         uint32_t count = 0;
         bool useCursorCount = false;
         // if we are in a dupsort database, and we are iterating over all entries, we can just count all the values for each key
-        if (dw->flags & MDBX_DUPSORT) {
+        if (dw->flags & (int) MDBX_DUPSORT) {
             if (iteratingOp == MDBX_PREV) {
                 iteratingOp = MDBX_PREV_NODUP;
                 useCursorCount = true;
