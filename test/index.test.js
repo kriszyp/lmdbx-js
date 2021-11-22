@@ -12,7 +12,9 @@ let nativeMethods, dirName = dirname(fileURLToPath(import.meta.url))
 
 import { open, levelup, bufferToKeyValue, keyValueToBuffer, asBinary, ABORT } from '../node-index.js';
 import { ArrayLikeIterable } from '../util/ArrayLikeIterable.js'
-
+import inspector from 'inspector'
+//inspector.open(9330, null, true); //debugger
+  
 describe('lmdbx-js', function() {
   let testDirPath = path.resolve(dirName, './testdata-ls');
 
@@ -608,8 +610,8 @@ describe('lmdbx-js', function() {
     });
 
     it('invalid key', async function() {
-      expect(() => db.get('')).to.throw();
-      expect(() => db.put('', 'test')).to.throw();
+      expect(() => db.get(Buffer.from([]))).to.throw();
+      expect(() => db.put(Buffer.from([]), 'test')).to.throw();
       expect(() => db.get({ foo: 'bar' })).to.throw();
       expect(() => db.put({ foo: 'bar' }, 'hello')).to.throw();
       expect(() => db.put('x'.repeat(1979), 'hello')).to.throw();
