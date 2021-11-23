@@ -35,7 +35,6 @@
     "directory": "test/types"
   },
   "scripts": {
-    "install": "node-gyp-build",
     "build": "node-gyp configure && node-gyp build -d && rollup -c",
     "build-js": "rollup -c",
     "prepare": "rollup -c",
