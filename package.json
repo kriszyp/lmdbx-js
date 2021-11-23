@@ -36,7 +36,6 @@
   },
   "scripts": {
   },
-  "gypfile": true,
   "dependencies": {
     "@fortawesome/fontawesome-free": "^5.15.4",
     "axios": "^0.24.0",
