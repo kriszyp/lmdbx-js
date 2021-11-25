@@ -4,7 +4,8 @@
 [![get](https://img.shields.io/badge/get-4.5%20MOPS-yellow)](README.md)
 [![put](https://img.shields.io/badge/put-1.7%20MOPS-yellow)](README.md)
 
-`lmdbx-js` is an ultra-fast interface to LMDB, which is derived from _libmdbx_. This package provides an extremly fastest and most efficient NodeJS key-value/database interface that exists for full storage and retrieval of structured JS data (objects, arrays, etc.) in a true persisted, scalable, ACID-compliant, database. It provides a simple interface for interacting with libmdbx, as a key-value store, that makes it easy to properly leverage the power, crash-proof design, and efficiency of libmdbx using intuitive JavaScript, and is designed to scale across multiple processes or threads. `lmdbx-js` offers several key features that make it idiomatic, highly performant, and easy to use libmdbx efficiently:
+`lmdbx-js` is an ultra-fast interface to [_libmdbx_](https://github.com/erthink/libmdbx), which is derived from [LMDB](https://en.wikipedia.org/wiki/Lightning_Memory-Mapped_Database).
+This package provides an extremly fastest and most efficient NodeJS key-value/database interface that exists for full storage and retrieval of structured JS data (objects, arrays, etc.) in a true persisted, scalable, ACID-compliant, database. It provides a simple interface for interacting with libmdbx, as a key-value store, that makes it easy to properly leverage the power, crash-proof design, and efficiency of libmdbx using intuitive JavaScript, and is designed to scale across multiple processes or threads. `lmdbx-js` offers several key features that make it idiomatic, highly performant, and easy to use libmdbx efficiently:
 * High-performance translation of JS values and data structures to/from binary key/value data
 * Queueing asynchronous off-thread write operations with promise-based API
 * Simple transaction management
