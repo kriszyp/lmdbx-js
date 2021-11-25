@@ -53,7 +53,7 @@ describe('lmdbx-js', function() {
       if (!options.checkLast)
         testIteration++;
       db = open(testDirPath + '/test-' + testIteration + '.mdb', Object.assign({
-        name: 'mydb3',
+        name: 'mydb1',
         create: true,
         useVersions: true,
         batchStartThreshold: 10,
@@ -70,14 +70,14 @@ describe('lmdbx-js', function() {
       if (!options.checkLast)
         db.clearSync();
       db2 = db.openDB(Object.assign({
-        name: 'mydb4',
+        name: 'mydb2',
         create: true,
         dupSort: true,
       }));
       if (!options.checkLast)
         db2.clearSync();
       db3 = db.openDB({
-        name: 'mydb5',
+        name: 'mydb3',
         create: true,
         dupSort: true,
         encoding: 'ordered-binary',
@@ -822,7 +822,7 @@ describe('lmdbx-js', function() {
       should.equal(db.get('test:b'), 2)
       should.equal(db.get('test:c'), undefined)
     });
-    it.skip('read and write with binary encoding', async function() {
+    it('read and write with binary encoding', async function() {
       let dbBinary = db.openDB(Object.assign({
         name: 'mydb5',
         create: true,
