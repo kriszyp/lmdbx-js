@@ -295,9 +295,9 @@ next_inst:	start = instruction++;
 					if (worker) {
 						worker->ReportError(mdbx_strerror(rc));
 					} else {
-						fprintf(stderr, "Error occurred during writes %s %p %p\n", mdbx_strerror(rc), start, worker);
-						fprintf(stderr, "flags after return code %u\n", *start);
+						return rc;
 					}
+					fprintf(stderr, "flags after return code %u\n", *start);
 				}
 				flags = FINISHED_OPERATION | FAILED_CONDITION;
 			}

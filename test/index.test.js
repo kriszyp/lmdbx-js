@@ -61,6 +61,8 @@ describe('lmdbx-js', function() {
         //useWritemap: true,
         //noSync: true,
         //overlappingSync: true,
+        pageSize: 8192,
+        maxReaders: 100,
         eventTurnBatching: false,
         keyEncoder: orderedBinaryEncoder,
         compression: {
@@ -609,11 +611,13 @@ describe('lmdbx-js', function() {
       should.equal(db.get(returnedKeys[0]), undefined)
     });
 
-    it('invalid key', async function() {
+    it.only('invalid key', async function() {
       expect(() => db.get({ foo: 'bar' })).to.throw();
       expect(() => db.put({ foo: 'bar' }, 'hello')).to.throw();
-      expect(() => db.put('x'.repeat(1979), 'hello')).to.throw();
-      expect(() => db2.put('x', 'x'.repeat(1979))).to.throw();
+      expect(() => db.put('x'.repeat(4027), 'hello')).to.throw();
+      expect(() => db2.put('x', 'x'.repeat(4027))).to.throw();
+      Array.from(db.getRange({ start: 'x', end: Buffer.from([])}))
+      expect(() => Array.from(db.getRange({ start: 'x'.repeat(4027)}))).to.throw();
     });
     it.skip('put options (sync)', function() {
       db.putSync('zkey6', 'test', { append: true, version: 33 });

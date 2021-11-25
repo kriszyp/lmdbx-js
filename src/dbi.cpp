@@ -43,7 +43,7 @@ NAN_METHOD(DbiWrap::ctor) {
     MDBX_dbi dbi;
     MDBX_txn *txn;
     int rc;
-    MDBX_db_flags_t flags = MDBX_DB_DEFAULTS ;
+    MDBX_db_flags_t flags = MDBX_DB_DEFAULTS;
     MDBX_txn_flags_t txnFlags = MDBX_TXN_READWRITE;
     Local<String> name;
     bool nameIsNull = false;
