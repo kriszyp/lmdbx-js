@@ -4,7 +4,8 @@
 [![get](https://img.shields.io/badge/get-4.5%20MOPS-yellow)](README.md)
 [![put](https://img.shields.io/badge/put-1.7%20MOPS-yellow)](README.md)
 
-`lmdbx-js` is an ultra-fast interface to LMDB, which is derived from _libmdbx_. This package provides an extremly fastest and most efficient NodeJS key-value/database interface that exists for full storage and retrieval of structured JS data (objects, arrays, etc.) in a true persisted, scalable, ACID-compliant, database. It provides a simple interface for interacting with libmdbx, as a key-value store, that makes it easy to properly leverage the power, crash-proof design, and efficiency of libmdbx using intuitive JavaScript, and is designed to scale across multiple processes or threads. `lmdbx-js` offers several key features that make it idiomatic, highly performant, and easy to use libmdbx efficiently:
+`lmdbx-js` is an ultra-fast interface to [_libmdbx_](https://github.com/erthink/libmdbx), which is derived from [LMDB](https://en.wikipedia.org/wiki/Lightning_Memory-Mapped_Database).
+This package provides an extremly fastest and most efficient NodeJS key-value/database interface that exists for full storage and retrieval of structured JS data (objects, arrays, etc.) in a true persisted, scalable, ACID-compliant, database. It provides a simple interface for interacting with libmdbx, as a key-value store, that makes it easy to properly leverage the power, crash-proof design, and efficiency of libmdbx using intuitive JavaScript, and is designed to scale across multiple processes or threads. `lmdbx-js` offers several key features that make it idiomatic, highly performant, and easy to use libmdbx efficiently:
 * High-performance translation of JS values and data structures to/from binary key/value data
 * Queueing asynchronous off-thread write operations with promise-based API
 * Simple transaction management
@@ -367,7 +368,8 @@ let db = open({ encoder: cbor });
 
 The following additional option properties are only available when creating the main database environment (`open`):
 * `path` - This is the file path to the database environment file you will use.
-* `maxDbs` - The maximum number of databases to be able to open within one root database/environment ([there is some extra overhead if this is set very high](http://www.lmdb.tech/doc/group__mdb.html#gaa2fc2f1f37cb1115e733b62cab2fcdbc)).
+* `pageSize` - This defines the page size of the database. This is 16,384 by default (previous versions defaulted to 4096). You may want to consider setting this to 32,768 for better performance on larger databases. Note that this does not affect the page size of an existing database.
+* `maxDbs` - The maximum number of databases to be able to open within one root database/environment ([there is some extra overhead if this is set very high](http://www.lmdb.tech/doc/group__mdb.html#gaa2fc2f1f37cb1115e733b62cab2fcdbc)). This defaults to 12.
 * `maxReaders` - The maximum number of concurrent read transactions (readers) to be able to open ([more information](http://www.lmdb.tech/doc/group__mdb.html#gae687966c24b790630be2a41573fe40e2)).
 * `overlappingSync` - This enables committing transactions where _libmdbx_ waits for a transaction to be fully flushed to disk _after_ the transaction has been committed. This option is discussed in more detail below.
 * `separateFlushed` - Resolve asynchronous operations when commits are finished and visible and include a separate promise for when a commit is flushed to disk, as a `flushed` property on the commit promise.
@@ -385,7 +387,6 @@ In addition, the following options map to _libmdbx_'s env flags, <a href="https:
 * `useWritemap` - Use writemaps, this can improve performance by reducing malloc calls and file writes, but can increase risk of a stray pointer corrupting data, and may be slower on Windows. Combined with `noSync`, normal reads/writes/transactions involve virtually zero explicit I/O calls, only modifications to memory maps that the OS persists when convenient, which may be beneficial.
 * `noMetaSync` - This isn't as dangerous as `noSync`, but doesn't improve performance much either.
 * `pageSize` - This changes the page size of the database. This is 4096 by default, and the default generally has the best performance since it aligns with normal OS page size.
-
 * `noReadAhead` - This disables read-ahead caching. Turning it off may help random read performance when the DB is larger than RAM and system RAM is full. However, this is not supported by all OSes, including Windows.
 * `noSubdir` - Treat `path` as a filename instead of directory (this is the default if the path appears to end with an extension and has '.' in it)
 * `readOnly` - Self-descriptive.

@@ -2,7 +2,6 @@ import { getAddressShared as getAddress } from './native.js';
 import { when } from './util/when.js';
 var backpressureArray;
 
-const MAX_KEY_SIZE = 1978;
 const WAITING_OPERATION = 0x2000000;
 const BACKPRESSURE_THRESHOLD = 50000;
 const TXN_DELIMITER = 0x8000000;
@@ -21,23 +20,24 @@ SYNC_PROMISE_SUCCESS.isSync = true;
 SYNC_PROMISE_FAIL.isSync = true;
 const ByteArray = typeof Buffer != 'undefined' ? Buffer.from : Uint8Array;
 //let debugLog = []
-
+const WRITE_BUFFER_SIZE = 0x10000;
 var log = [];
-export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, useWritemap,
+export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, useWritemap, maxKeySize,
 	eventTurnBatching, txnStartThreshold, batchStartThreshold, overlappingSync, commitDelay, separateFlushed }) {
 	//  stands for write instructions
 	var dynamicBytes;
 	function allocateInstructionBuffer() {
-		let buffer = new SharedArrayBuffer(0x10000); // Must use a shared buffer to ensure GC doesn't move it around
+		let buffer = new SharedArrayBuffer(WRITE_BUFFER_SIZE); // Must use a shared buffer to ensure GC doesn't move it around
 		dynamicBytes = new ByteArray(buffer);
-		let uint32 = dynamicBytes.uint32 = new Uint32Array(buffer, 0, 0x10000 >> 2);
+		let uint32 = dynamicBytes.uint32 = new Uint32Array(buffer, 0, WRITE_BUFFER_SIZE >> 2);
 		uint32[0] = 0;
-		dynamicBytes.float64 = new Float64Array(buffer, 0, 0x10000 >> 3);
+		dynamicBytes.float64 = new Float64Array(buffer, 0, WRITE_BUFFER_SIZE >> 3);
 		buffer.address = getAddress(buffer);
 		uint32.address = buffer.address + uint32.byteOffset;
 		dynamicBytes.position = 0;
 		return dynamicBytes;
 	}
+	var newBufferThreshold = (WRITE_BUFFER_SIZE - maxKeySize - 64) >> 3; // need to reserve more room if we do inline values
 	var outstandingWriteCount = 0;
 	var startAddress = 0;
 	var writeTxn = null;
@@ -88,8 +88,8 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 				valueSize = valueBuffer.end - valueBufferStart; // size
 			else
 				valueSize = valueBuffer.length;
-			if (store.dupSort && valueSize > MAX_KEY_SIZE)
-				throw new Error('The value is larger than the maximum size (' + MAX_KEY_SIZE + ') for a value in a dupSort database');
+			if (store.dupSort && valueSize > maxKeySize)
+				throw new Error('The value is larger than the maximum size (' + maxKeySize + ') for a value in a dupSort database');
 		} else
 			valueSize = 0;
 		if (writeTxn) {
@@ -106,7 +106,6 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 						console.error(error);
 					}
 					enqueuedEventTurnBatch = null;
-					//console.log('ending event turn')
 					batchDepth--;
 					finishBatch();
 					if (writeBatchStart)
@@ -136,12 +135,14 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 				endPosition = store.writeKey(key, targetBytes, keyStartPosition);
 			} catch(error) {
 				targetBytes.fill(0, keyStartPosition);
+				if (error.name == 'RangeError')
+					error = new Error('Key size is larger than the maximum key size (' + maxKeySize + ')');
 				throw error;
 			}
 			let keySize = endPosition - keyStartPosition;
-			if (keySize > MAX_KEY_SIZE) {
+			if (keySize > maxKeySize) {
 				targetBytes.fill(0, keyStartPosition); // restore zeros
-				throw new Error('Key size is larger than the maximum key size (' + MAX_KEY_SIZE + ')');
+				throw new Error('Key size is larger than the maximum key size (' + maxKeySize + ')');
 			}
 			uint32[flagPosition + 2] = keySize;
 			position = (endPosition + 16) >> 3;
@@ -173,7 +174,7 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 			}
 			if (ifVersion !== undefined) {
 				if (ifVersion === null)
-					flags |= 0x10;
+					flags |= 0x10; // if it does not exist, MDB_NOOVERWRITE
 				else {
 					flags |= 0x100;
 					float64[position++] = ifVersion;
@@ -186,7 +187,6 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 		} else
 			position++;
 		targetBytes.position = position;
-		//console.log('js write', (targetBytes.buffer.address + (flagPosition << 2)).toString(16), flags.toString(16))
 		if (writeTxn) {
 			uint32[0] = flags;
 			env.write(uint32.address);
@@ -195,14 +195,13 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 		// if we ever use buffers that haven't been zero'ed, need to clear out the next slot like this:
 		// uint32[position << 1] = 0 // clear out the next slot
 		let nextUint32;
-		if (position > 0x1e00) { // 61440 bytes
+		if (position > newBufferThreshold) {
 			// make new buffer and make pointer to it
 			let lastPosition = position;
 			targetBytes = allocateInstructionBuffer();
 			position = targetBytes.position;
 			float64[lastPosition + 1] = targetBytes.uint32.address + position;
 			uint32[lastPosition << 1] = 3; // pointer instruction
-			//console.log('pointer from ', (lastFloat64.buffer.address + (lastPosition << 3)).toString(16), 'to', (targetBytes.buffer.address + position).toString(16), 'flag position', (uint32.buffer.address + (flagPosition << 2)).toString(16))
 			nextUint32 = targetBytes.uint32;
 		} else
 			nextUint32 = uint32;
@@ -238,7 +237,6 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 				//writeStatus = Atomics.or(uint32, flagPosition, flags)
 				if (writeBatchStart && !writeStatus) {
 					outstandingBatchCount += 1 + (valueSize >> 12);
-					//console.log(outstandingBatchCount, batchStartThreshold)
 					if (outstandingBatchCount > batchStartThreshold) {
 						outstandingBatchCount = 0;
 						writeBatchStart();
@@ -252,7 +250,6 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 	
 			outstandingWriteCount++;
 			if (writeStatus & TXN_DELIMITER) {
-				//console.warn('Got TXN delimiter', ( uint32.address + (flagPosition << 2)).toString(16))
 				commitPromise = null; // TODO: Don't reset these if this comes from the batch start operation on an event turn batch
 				flushPromise = null;
 				queueCommitResolution(resolution);
@@ -263,7 +260,6 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 			if (!flushPromise && overlappingSync && separateFlushed)
 				flushPromise = new Promise(resolve => flushResolvers.push(resolve));
 			if (writeStatus & WAITING_OPERATION) { // write thread is waiting
-				//console.log('resume batch thread', uint32.buffer.address + (flagPosition << 2))
 				env.write(0);
 			}
 			if (outstandingWriteCount > BACKPRESSURE_THRESHOLD) {
@@ -319,7 +315,6 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 		};
 	}
 	function startWriting() {
-		//console.log('start address ' + startAddress.toString(16), store.name)
 		if (enqueuedCommit) {
 			clearImmediate(enqueuedCommit);
 			enqueuedCommit = null;
@@ -327,7 +322,6 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 		let resolvers = flushResolvers;
 		flushResolvers = [];
 		env.startWriting(startAddress, (status) => {
-			//console.log('finished batch', store.name)
 			if (dynamicBytes.uint32[dynamicBytes.position << 1] & TXN_DELIMITER)
 				queueCommitResolution(nextResolution);
 
@@ -369,7 +363,6 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 		let instructionStatus;
 		while ((instructionStatus = unwrittenResolution.uint32[unwrittenResolution.flagPosition])
 				& 0x1000000) {
-			//console.log('instructionStatus: ' + instructionStatus.toString(16))
 			if (unwrittenResolution.callbacks) {
 				nextTxnCallbacks.push(unwrittenResolution.callbacks);
 				unwrittenResolution.callbacks = null;
@@ -568,7 +561,7 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 				}
 				return SYNC_PROMISE_FAIL;
 			}
-			let finishStartWrite = writeInstructions(typeof key === 'undefined' ? 1 : 4, this, key, undefined, undefined, version);
+			let finishStartWrite = writeInstructions(key === undefined || version === undefined ? 1 : 4, this, key, undefined, undefined, version);
 			let promise;
 			batchDepth += 2;
 			if (batchDepth > 2)
@@ -579,7 +572,6 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 				};
 				outstandingBatchCount = 0;
 			}
-			//console.warn('wrote start of ifVersion', this.path)
 			try {
 				if (typeof callback === 'function') {
 					callback();
@@ -590,7 +582,6 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 					}
 				}
 			} finally {
-				//console.warn('writing end of ifVersion', this.path, (dynamicBytes.buffer.address + ((dynamicBytes.position + 1) << 3)).toString(16))
 				if (!promise) {
 					finishBatch();
 					batchDepth -= 2;

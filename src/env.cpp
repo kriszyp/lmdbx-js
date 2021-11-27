@@ -198,6 +198,8 @@ NAN_METHOD(EnvWrap::open) {
             mdbx_env_close(ew->env);
             ew->env = envPath.env;
             pthread_mutex_unlock(envsLock);
+            int maxKeySize = mdbx_env_get_maxkeysize_ex(ew->env, MDBX_DB_DEFAULTS);
+            info.GetReturnValue().Set(Nan::New<Number>(maxKeySize));
             return;
         }
     }
@@ -268,6 +270,8 @@ NAN_METHOD(EnvWrap::open) {
     envPath.count = 1;
     envs.push_back(envPath);
     pthread_mutex_unlock(envsLock);
+    int maxKeySize = mdbx_env_get_maxkeysize_ex(ew->env, MDBX_DB_DEFAULTS);
+    info.GetReturnValue().Set(Nan::New<Number>(maxKeySize));
 }
 
 NAN_METHOD(EnvWrap::resize) {
