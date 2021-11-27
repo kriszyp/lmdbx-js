@@ -20,7 +20,7 @@ console.log('opening')
 	const lmdb = openLmdb('tests/db/test-lmdb.mdb', {
 		keyEncoding: 'binary',
 		winMemoryPriority: 3,
-//		mapSize: 0x10000,
+		mapSize: 0x10000,
 useWritemap: true,
 noSync: true,
 		pageSize: 0x1000

@@ -178,9 +178,9 @@ uint32_t CursorWrap::doPosition(uint32_t offset, uint32_t keySize, uint64_t endK
                 }
             } else // forward, just do a get by range
                 rc = mdbx_cursor_get(cursor, &key, &data, data.iov_len ?
-                    (flags & 0x4000) ? MDBX_GET_BOTH : MDBX_GET_BOTH_RANGE : MDBX_SET_KEY);
+                    (flags & 0x4000) ? MDBX_SET_LOWERBOUND : MDBX_GET_BOTH_RANGE : MDBX_SET_KEY);
 
-            if (rc == MDBX_NOTFOUND)
+            if (rc && (rc == MDBX_NOTFOUND || rc == MDBX_RESULT_TRUE))
                 return 0;
             if (flags & 0x1000 && (!endKeyAddress || (flags & 0x4000))) {
                 size_t count;
