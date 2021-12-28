@@ -6,7 +6,7 @@ using namespace node;
 
 CursorWrap::CursorWrap(MDBX_cursor *cursor) {
     this->cursor = cursor;
-    this->keyType = NodeLmdbxKeyType::StringKey;
+    this->keyType = LmdbxKeyType::StringKey;
     this->freeKey = nullptr;
     this->endKey.iov_len = 0; // indicates no end key (yet)
 }
@@ -39,7 +39,7 @@ NAN_METHOD(CursorWrap::ctor) {
 
     // Get key type
     auto keyType = keyTypeFromOptions(info[1], dw->keyType);
-    if (dw->keyType == NodeLmdbxKeyType::Uint32Key && keyType != NodeLmdbxKeyType::Uint32Key) {
+    if (dw->keyType == LmdbxKeyType::Uint32Key && keyType != LmdbxKeyType::Uint32Key) {
         return Nan::ThrowError("You specified uint32 keys on the Dbi, so you can't use other key types with it.");
     }
 
@@ -73,6 +73,12 @@ NAN_METHOD(CursorWrap::close) {
     cw->dw->Unref();
     cw->cursor = nullptr;
 }
+extern "C" EXTERN void cursorClose(double cwPointer) {
+    CursorWrap *cw = (CursorWrap*) (size_t) cwPointer;
+    mdbx_cursor_close(cw->cursor);
+    cw->cursor = nullptr;
+}
+
 
 NAN_METHOD(CursorWrap::del) {
     Nan::HandleScope scope;
@@ -104,8 +110,7 @@ int CursorWrap::returnEntry(int lastRC, MDBX_val &key, MDBX_val &data) {
         if (lastRC == MDBX_NOTFOUND)
             return 0;
         else {
-            throwLmdbxError(lastRC);
-            return 0;
+            return lastRC | 0x10000000;
         }
     }   
     if (endKey.iov_len > 0) {
@@ -131,7 +136,7 @@ int CursorWrap::returnEntry(int lastRC, MDBX_val &key, MDBX_val &data) {
     return key.iov_len;
 }
 
-const int START_ADDRESS_POSITION = 8140;
+const int START_ADDRESS_POSITION = 4064;
 uint32_t CursorWrap::doPosition(uint32_t offset, uint32_t keySize, uint64_t endKeyAddress) {
     //char* keyBuffer = dw->ew->keyBuffer;
     MDBX_val key, data;
@@ -153,7 +158,7 @@ uint32_t CursorWrap::doPosition(uint32_t offset, uint32_t keySize, uint64_t endK
             MDBX_NEXT_NODUP;
     key.iov_len = keySize;
     key.iov_base = dw->ew->keyBuffer;
-    if (key.iov_len == 0) {
+    if (keySize == 0) {
         rc = mdbx_cursor_get(cursor, &key, &data, flags & 0x400 ? MDBX_LAST : MDBX_FIRST);  
     } else {
         if (flags & 0x800) { // only values for this key
@@ -272,20 +277,21 @@ void CursorWrap::position(
     uint32_t result = cw->doPosition(offset, keySize, endKeyAddress);
     info.GetReturnValue().Set(Nan::New<Number>(result));
 }
+extern "C" EXTERN int cursorPosition(double cwPointer, uint32_t flags, uint32_t offset, uint32_t keySize, double endKeyAddress) {
+    CursorWrap *cw = (CursorWrap*) (size_t) cwPointer;
+    cw->flags = flags;
+    return cw->doPosition(offset, keySize, (uint64_t) endKeyAddress);
+}
+
 #ifdef ENABLE_FAST_API
-uint32_t CursorWrap::iterateFast(Local<Object> receiver_obj, FastApiCallbackOptions& options) {
+int32_t CursorWrap::iterateFast(Local<Object> receiver_obj, FastApiCallbackOptions& options) {
     CursorWrap* cw = static_cast<CursorWrap*>(
         receiver_obj->GetAlignedPointerFromInternalField(0));
     DbiWrap* dw = cw->dw;
     dw->getFast = true;
     MDBX_val key, data;
     int rc = mdbx_cursor_get(cw->cursor, &key, &data, cw->iteratingOp);
-    uint32_t result = cw->returnEntry(rc, key, data);
-    if (dw->getFast)
-        dw->getFast = false;
-    else
-        options.fallback = true;
-    return result;
+    return cw->returnEntry(rc, key, data);
 }
 #endif
 void CursorWrap::iterate(
@@ -297,12 +303,24 @@ void CursorWrap::iterate(
     int rc = mdbx_cursor_get(cw->cursor, &key, &data, cw->iteratingOp);
     return info.GetReturnValue().Set(Nan::New<Number>(cw->returnEntry(rc, key, data)));
 }
+extern "C" EXTERN int cursorIterate(double cwPointer) {
+    CursorWrap *cw = (CursorWrap*) (size_t) cwPointer;
+    MDB_val key, data;
+    int rc = mdbx_cursor_get(cw->cursor, &key, &data, cw->iteratingOp);
+    return cw->returnEntry(rc, key, data);
+}
 
 NAN_METHOD(CursorWrap::getCurrentValue) {
     CursorWrap* cw = Nan::ObjectWrap::Unwrap<CursorWrap>(info.Holder());
     MDBX_val key, data;
     int rc = mdbx_cursor_get(cw->cursor, &key, &data, MDBX_GET_CURRENT);
     return info.GetReturnValue().Set(Nan::New<Number>(cw->returnEntry(rc, key, data)));
+}
+extern "C" EXTERN int cursorCurrentValue(double cwPointer) {
+    CursorWrap *cw = (CursorWrap*) (size_t) cwPointer;
+    MDB_val key, data;
+    int rc = mdbx_cursor_get(cw->cursor, &key, &data, MDB_GET_CURRENT);
+    return cw->returnEntry(rc, key, data);
 }
 
 NAN_METHOD(CursorWrap::renew) {
@@ -313,7 +331,10 @@ NAN_METHOD(CursorWrap::renew) {
         return throwLmdbxError(rc);
     }
 }
-
+extern "C" EXTERN int cursorRenew(double cwPointer) {
+    CursorWrap *cw = (CursorWrap*) (size_t) cwPointer;
+    return mdbx_cursor_renew(cw->txn = cw->dw->ew->getReadTxn(), cw->cursor);
+}
 void CursorWrap::setupExports(Local<Object> exports) {
     // CursorWrap: Prepare constructor template
     Local<FunctionTemplate> cursorTpl = Nan::New<FunctionTemplate>(CursorWrap::ctor);

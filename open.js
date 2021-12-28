@@ -1,31 +1,24 @@
-import { extname, basename, dirname} from 'path';
-import EventEmitter from 'events';
-import { Env, Compression, getAddress, require, arch, fs } from './native.js';
+import { Compression, getAddress, require, arch, fs, path as pathModule, lmdbError, EventEmitter, MsgpackrEncoder, Env } from './external.js';
 import { CachingStore, setGetLastVersion } from './caching.js';
 import { addReadMethods, makeReusableBuffer } from './read.js';
 import { addWriteMethods } from './write.js';
 import { applyKeyHandling } from './keys.js';
-import { Encoder as MsgpackrEncoder } from 'msgpackr';
 setGetLastVersion(getLastVersion);
 let keyBytes, keyBytesView;
 const buffers = [];
 
-const DEFAULT_SYNC_BATCH_THRESHOLD = 200000000; // 200MB
-const DEFAULT_IMMEDIATE_BATCH_THRESHOLD = 10000000; // 10MB
+// this is hard coded as an upper limit because it is important assumption of the fixed buffers in writing instructions
+// this corresponds to the max key size for 8KB pages, which is currently the default
+const MAX_KEY_SIZE = 4026;
 const DEFAULT_COMMIT_DELAY = 0;
-const READING_TNX = {
-	readOnly: true
-};
 
 export const allDbs = new Map();
-let env;
 let defaultCompression;
 let lastSize, lastOffset, lastVersion;
 let abortedNonChildTransactionWarn;
 export function open(path, options) {
-	if (!keyBytes)
+	if (!keyBytes) // TODO: Consolidate get buffer and key buffer (don't think we need both)
 		allocateFixedBuffer();
-	let env = new Env();
 	let committingWrites;
 	let scheduledTransactions;
 	let scheduledOperations;
@@ -35,8 +28,8 @@ export function open(path, options) {
 		options = path;
 		path = options.path;
 	}
-	let extension = extname(path);
-	let name = basename(path, extension);
+	let extension = pathModule.extname(path);
+	let name = pathModule.basename(path, extension);
 	let is32Bit = arch().endsWith('32');
 	let remapChunks = (options && options.remapChunks) || ((options && options.mapSize) ?
 		(is32Bit && options.mapSize > 0x100000000) : // larger than fits in address space, must use dynamic maps
@@ -49,7 +42,7 @@ export function open(path, options) {
 		remapChunks,
 		keyBytes,
 		mapSize: 0x1000000000,
-		pageSize: 16384,
+		pageSize: 4096,
 	}, options);
 	if (options.asyncTransactionOrder == 'before') {
 		console.warn('asyncTransactionOrder: "before" is deprecated');
@@ -58,8 +51,8 @@ export function open(path, options) {
 		asyncTransactionStrictOrder = true;
 		asyncTransactionAfter = false;
 	}
-	if (!fs.existsSync(options.noSubdir ? dirname(path) : path))
-		fs.mkdirSync(options.noSubdir ? dirname(path) : path, { recursive: true });
+	if (!exists(options.noSubdir ? pathModule.dirname(path) : path))
+		fs.mkdirSync(options.noSubdir ? pathModule.dirname(path) : path, { recursive: true });
 	if (options.compression) {
 		let setDefault;
 		if (options.compression == true) {
@@ -85,9 +78,25 @@ export function open(path, options) {
 			Object.assign(options.compression, compressionOptions);
 		}
 	}
+	let flags =
+		(options.overlappingSync ? 0x1000 : 0) |
+		(options.noSubdir ? 0x4000 : 0) |
+		(options.noSync ? 0x10000 : 0) |
+		(options.readOnly ? 0x20000 : 0) |
+		(options.noMetaSync ? 0x40000 : 0) |
+		(options.useWritemap ? 0x80000 : 0) |
+		(options.mapAsync ? 0x100000 : 0) |
+		(options.noReadAhead ? 0x800000 : 0) |
+		(options.noMemInit ? 0x1000000 : 0) |
+		(options.usePreviousSnapshot ? 0x2000000 : 0) |
+		(options.remapChunks ? 0x4000000 : 0);
 
-	let maxKeySize = env.open(options);
-	maxKeySize = Math.min(maxKeySize, 8122);
+	let env = new Env();
+	let rc = env.open(options, flags, options.separateFlushed ? 1 : 0);
+   if (rc)
+		lmdbxError(rc);
+	let maxKeySize = env.getMaxKeySize();
+	maxKeySize = Math.min(maxKeySize, MAX_KEY_SIZE);
 	env.readerCheck(); // clear out any stale entries
 	let stores = [];
 	class LMDBXStore extends EventEmitter {
@@ -96,13 +105,6 @@ export function open(path, options) {
 			if (dbName === undefined)
 				throw new Error('Database name must be supplied in name property (may be null for root database)');
 
-			const openDB = () => {
-				this.db = env.openDbi(Object.assign({
-					name: dbName,
-					create: true,
-				}, dbOptions));
-				this.db.name = dbName || null;
-			};
 			if (dbOptions.compression instanceof Compression) {
 				// do nothing, already compression object
 			} else if (dbOptions.compression && typeof dbOptions.compression == 'object')
@@ -116,7 +118,24 @@ export function open(path, options) {
 			if (dbOptions.dupSort && (dbOptions.useVersions || dbOptions.cache)) {
 				throw new Error('The dupSort flag can not be combined with versions or caching');
 			}
-			openDB();
+			this.ensureReadTxn();
+			let keyIsBuffer
+			if (dbOptions.keyEncoding == 'uint32') {
+				dbOptions.keyIsUint32 = true;
+			} else if (dbOptions.keyEncoder) {
+				if (dbOptions.keyEncoder.enableNullTermination) {
+					dbOptions.keyEncoder.enableNullTermination()
+				}else
+					keyIsBuffer = true;
+			} else if (dbOptions.keyEncoding == 'binary') {
+				keyIsBuffer = true;
+			}
+			this.db = env.openDbi(Object.assign({
+				name: dbName,
+				create: true,
+				keyIsBuffer,
+			}, dbOptions));
+			this.db.name = dbName || null;
 			this.resetReadTxn(); // a read transaction becomes invalid after opening another db
 			this.name = dbName;
 			this.status = 'open';
@@ -136,16 +155,19 @@ export function open(path, options) {
 				strictAsyncOrder: options.strictAsyncOrder,
 			}, dbOptions);
 			let Encoder;
-			if (this.encoder) {
+			if (this.encoder && this.encoder.Encoder) {
 				Encoder = this.encoder.Encoder;
-			} else if (!this.encoding || this.encoding == 'msgpack' || this.encoding == 'cbor') {
+				this.encoder = null; // don't copy everything from the module
+			}
+			if (!Encoder && !(this.encoder && this.encoder.encode) && (!this.encoding || this.encoding == 'msgpack' || this.encoding == 'cbor')) {
 				Encoder = (this.encoding == 'cbor' ? require('cbor-x').Encoder : MsgpackrEncoder);
 			}
 			if (Encoder) {
 				this.encoder = new Encoder(Object.assign(
+					assignConstrainedProperties(['copyBuffers', 'getStructures', 'saveStructures', 'useFloat32', 'useRecords', 'structuredClone', 'variableMapSize', 'useTimestamp32', 'largeBigIntToFloat', 'encodeUndefinedAsNil', 'int64AsNumber', 'onInvalidDate', 'mapsAsObjects', 'useTag259ForMaps', 'pack', 'maxSharedStructures', 'shouldShareStructure'],
 					this.sharedStructuresKey ? this.setupSharedStructures() : {
 						copyBuffers: true, // need to copy any embedded buffers that are found since we use unsafe buffers
-					}, options, dbOptions));
+					}, options, dbOptions), this.encoder));
 			}
 			if (this.encoding == 'json') {
 				this.encoder = {
@@ -329,12 +351,35 @@ export function setLastVersion(version) {
 	return keyBytesView.setFloat64(16, version, true);
 }
 
-const KEY_BUFFER_SIZE = 8192
+const KEY_BUFFER_SIZE = 4096;
 function allocateFixedBuffer() {
-	keyBytes = Buffer.allocUnsafeSlow(KEY_BUFFER_SIZE);
+	keyBytes = typeof Buffer != 'undefined' ? Buffer.allocUnsafeSlow(KEY_BUFFER_SIZE) : new Uint8Array(KEY_BUFFER_SIZE);
 	const keyBuffer = keyBytes.buffer;
-	keyBytesView = keyBytes.dataView = new DataView(keyBytes.buffer, 0, KEY_BUFFER_SIZE); // max key size is actually 8122
+	keyBytesView = keyBytes.dataView = new DataView(keyBytes.buffer, 0, KEY_BUFFER_SIZE); // max key size is actually 4026
 	keyBytes.uint32 = new Uint32Array(keyBuffer, 0, KEY_BUFFER_SIZE >> 2);
 	keyBytes.float64 = new Float64Array(keyBuffer, 0, KEY_BUFFER_SIZE >> 3);
-	keyBytes.uint32.address = keyBytes.address = keyBuffer.address = getAddress(keyBuffer);
+	keyBytes.uint32.address = keyBytes.address = keyBuffer.address = getAddress(keyBytes);
+}
+
+function exists(path) {
+	if (fs.existsSync)
+		return fs.existsSync(path);
+	try {
+		return fs.statSync(path);
+	} catch (error) {
+//		if (error.name == 'NotFound')
+			return false
+//		throw error
+	}
+}
+
+function assignConstrainedProperties(allowedProperties, target) {
+	for (let i = 2; i < arguments.length; i++) {
+		let source = arguments[i];
+		for (let key in source) {
+			if (allowedProperties.includes(key))
+				target[key] = source[key];
+		}
+	}
+	return target;
 }

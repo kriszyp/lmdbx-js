@@ -43,6 +43,7 @@ const int IF_NO_EXISTS = MDBX_NOOVERWRITE; //0x10;
 // result codes:
 const int FAILED_CONDITION = 0x4000000;
 const int FINISHED_OPERATION = 0x1000000;
+const double ANY_VERSION = 3.542694326329068e-103; // special marker for any version
 
 
 WriteWorker::~WriteWorker() {
@@ -51,9 +52,8 @@ WriteWorker::~WriteWorker() {
 		envForTxn->writeWorker = nullptr;
 }
 
-WriteWorker::WriteWorker(MDBX_env* env, EnvWrap* envForTxn, uint32_t* instructions, Nan::Callback *callback)
-		: Nan::AsyncProgressWorker(callback, "lmdb:write"),
-		envForTxn(envForTxn),
+WriteWorker::WriteWorker(MDBX_env* env, EnvWrap* envForTxn, uint32_t* instructions)
+		: envForTxn(envForTxn),
 		instructions(instructions),
 		env(env) {
 	//fprintf(stdout, "nextCompressibleArg %p\n", nextCompressibleArg);
@@ -61,9 +61,22 @@ WriteWorker::WriteWorker(MDBX_env* env, EnvWrap* envForTxn, uint32_t* instructio
 		txn = nullptr;
 	}
 
-void WriteWorker::Execute(const ExecutionProgress& executionProgress) {
+NanWriteWorker::NanWriteWorker(MDBX_env* env, EnvWrap* envForTxn, uint32_t* instructions, Nan::Callback *callback)
+		: Nan::AsyncProgressWorker(callback, "lmdbx:write"), WriteWorker(env, envForTxn, instructions) {
+	//fprintf(stdout, "nextCompressibleArg %p\n", nextCompressibleArg);
+		interruptionStatus = 0;
+		txn = nullptr;
+	}
+
+void NanWriteWorker::Execute(const ExecutionProgress& executionProgress) {
 	this->executionProgress = (ExecutionProgress*) &executionProgress;
 	Write();
+}
+void WriteWorker::SendUpdate() {
+	//fprintf(stderr, "This SendUpdate does not work!\n");
+}
+void NanWriteWorker::SendUpdate() {
+	executionProgress->Send(nullptr, 0);
 }
 MDBX_txn* WriteWorker::AcquireTxn(int* flags) {
 	bool commitSynchronously = *flags & TXN_SYNCHRONOUS_COMMIT;
@@ -94,13 +107,18 @@ void WriteWorker::UnlockTxn() {
 	pthread_mutex_unlock(envForTxn->writingLock);
 }
 void WriteWorker::ReportError(const char* error) {
+	hasError = true;
+	fprintf(stderr, "Error %s\n", error);
+}
+void NanWriteWorker::ReportError(const char* error) {
+	hasError = true;
 	SetErrorMessage(error);
 }
 int WriteWorker::WaitForCallbacks(MDBX_txn** txn, bool allowCommit, uint32_t* target) {
 	int rc;
 	//fprintf(stderr, "wait for callback %p\n", this);
 	if (!finishedProgress)
-		executionProgress->Send(nullptr, 0);
+		SendUpdate();
 	pthread_cond_signal(envForTxn->writingCond);
 	interruptionStatus = allowCommit ? ALLOW_COMMIT : 0;
 	if (target) {
@@ -197,8 +215,9 @@ next_inst:	start = instruction++;
 				rc = mdbx_get(txn, dbi, &key, &value);
 				if (rc)
 					validated = false;
-				else
+				else if (conditionalVersion != ANY_VERSION) {
 					validated = validated && conditionalVersion == *((double*)value.iov_base);
+				}
 			}
 			if (flags & SET_VERSION) {
 				setVersion = *((double*) instruction);
@@ -297,7 +316,6 @@ next_inst:	start = instruction++;
 					} else {
 						return rc;
 					}
-					fprintf(stderr, "flags after return code %u\n", *start);
 				}
 				flags = FINISHED_OPERATION | FAILED_CONDITION;
 			}
@@ -323,12 +341,19 @@ void WriteWorker::Write() {
 	pthread_mutex_lock(envForTxn->writingLock);
 	rc = mdbx_txn_begin(env, nullptr, /*(envFlags & MDBX_OVERLAPPINGSYNC) ? MDBX_NOSYNC : */MDBX_TXN_READWRITE, &txn);
 	if (rc != 0) {
-		return SetErrorMessage(mdbx_strerror(rc));
+		return ReportError(mdbx_strerror(rc));
 	}
-
+	hasError = false;
 	rc = DoWrites(txn, envForTxn, instructions, this);
 
-	if (callback) {
+	if (rc || hasError)
+		mdbx_txn_abort(txn);
+	else
+		rc = mdbx_txn_commit(txn);
+	txn = nullptr;
+	pthread_mutex_unlock(envForTxn->writingLock);
+	if (rc || hasError) {
+		std::atomic_fetch_or((std::atomic<uint32_t>*) instructions, (uint32_t) TXN_HAD_ERROR);
 		if (rc)
 			mdbx_txn_abort(txn);
 		else
@@ -337,7 +362,7 @@ void WriteWorker::Write() {
 		pthread_mutex_unlock(envForTxn->writingLock);
 		if (rc) {
 			std::atomic_fetch_or((std::atomic<uint32_t>*) instructions, (uint32_t) TXN_HAD_ERROR);
-			return SetErrorMessage(mdbx_strerror(rc));
+			return ReportError(mdbx_strerror(rc));
 		}/* else if (envFlags & MDBX_OVERLAPPINGSYNC) {
 			// note that once we set the instructions byte to committed, we can *not* touch it again
 			// because JS can then GC and deallocate the buffer it references and it can segfault if we access again
@@ -348,14 +373,14 @@ void WriteWorker::Write() {
 			rc = mdbx_env_sync(env, true);
 			if (!(envForTxn->jsFlags & SEPARATE_FLUSHED))
 				std::atomic_fetch_or((std::atomic<uint32_t>*) instructions, (uint32_t) TXN_COMMITTED);
-		} */else {
+		} */else
 			std::atomic_fetch_or((std::atomic<uint32_t>*) instructions, (uint32_t) TXN_COMMITTED);
-		}
-	} else
-		interruptionStatus = rc;
+	} else {
+		std::atomic_fetch_or((std::atomic<uint32_t>*) instructions, (uint32_t) TXN_COMMITTED);
+	}
 }
 
-void WriteWorker::HandleProgressCallback(const char* data, size_t count) {
+void NanWriteWorker::HandleProgressCallback(const char* data, size_t count) {
 	Nan::HandleScope scope;
 	v8::Local<v8::Value> argv[] = {
 		Nan::New<Number>(progressStatus)
@@ -378,7 +403,7 @@ void WriteWorker::HandleProgressCallback(const char* data, size_t count) {
 	pthread_mutex_unlock(envForTxn->writingLock);
 }
 
-void WriteWorker::HandleOKCallback() {
+void NanWriteWorker::HandleOKCallback() {
 	Nan::HandleScope scope;
 	Local<v8::Value> argv[] = {
 		Nan::New<Number>(0)
@@ -395,9 +420,19 @@ NAN_METHOD(EnvWrap::startWriting) {
     size_t instructionAddress = Local<Number>::Cast(info[0])->Value();
     Nan::Callback* callback = new Nan::Callback(Local<v8::Function>::Cast(info[1]));
 
-    WriteWorker* worker = new WriteWorker(ew->env, ew, (uint32_t*) instructionAddress, callback);
+    NanWriteWorker* worker = new NanWriteWorker(ew->env, ew, (uint32_t*) instructionAddress, callback);
 	ew->writeWorker = worker;
     Nan::AsyncQueueWorker(worker);
+}
+
+extern "C" EXTERN int32_t startWriting(double ewPointer, double instructionAddress) {
+	EnvWrap* ew = (EnvWrap*) (size_t) ewPointer;
+    WriteWorker* worker = new WriteWorker(ew->env, ew, (uint32_t*) (size_t) instructionAddress);
+	ew->writeWorker = worker;
+	worker->Write();
+	ew->writeWorker = nullptr;
+	delete worker;
+	return 0;
 }
 
 
@@ -434,4 +469,17 @@ void EnvWrap::write(
 	}
 	if (rc && !(rc == MDBX_KEYEXIST || rc == MDBX_NOTFOUND))
 		return Nan::ThrowError(mdbx_strerror(rc));
+}
+
+extern "C" EXTERN int32_t envWrite(double ewPointer, double instructionAddress) {
+	int rc = 0;
+	EnvWrap* ew = (EnvWrap*) (size_t) ewPointer;
+	if (instructionAddress)
+		rc = DoWrites(ew->writeTxn->txn, ew, (uint32_t*) (size_t)instructionAddress, nullptr);
+	else if (ew->writeWorker) {
+		pthread_cond_signal(ew->writingCond);
+	}
+	if (rc && !(rc == MDB_KEYEXIST || rc == MDB_NOTFOUND))
+		return rc;
+	return 0;
 }

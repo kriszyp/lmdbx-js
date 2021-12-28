@@ -51,6 +51,12 @@ NAN_METHOD(Compression::setBuffer) {
     compression->decompressTarget = compression->dictionary + dictSize;
     compression->decompressSize = node::Buffer::Length(info[0]) - dictSize;
 }
+extern "C" EXTERN void setCompressionBuffer(double compressionPointer, char* buffer, uint32_t bufferSize, uint32_t dictSize) {
+    Compression *compression = (Compression*) (size_t) compressionPointer;
+    compression->dictionary = buffer;
+    compression->decompressTarget = buffer + dictSize;
+    compression->decompressSize = bufferSize - dictSize;
+}
 
 void Compression::decompress(MDBX_val& data, bool &isValid, bool canAllocate) {
     uint32_t uncompressedLength;
@@ -87,7 +93,7 @@ void Compression::decompress(MDBX_val& data, bool &isValid, bool canAllocate) {
         dictionary, decompressTarget - dictionary);
     //fprintf(stdout, "first uncompressed byte %X %X %X %X %X %X\n", uncompressedData[0], uncompressedData[1], uncompressedData[2], uncompressedData[3], uncompressedData[4], uncompressedData[5]);
     if (written < 0) {
-        //fprintf(stderr, "Failed to decompress data %u %u %u %u\n", charData[0], data.iov_len, compressionHeaderSize, uncompressedLength);
+        fprintf(stderr, "Failed to decompress data %u %u %u %u %u %u %u %u\n", compressionHeaderSize, uncompressedLength, charData[0], charData[1], charData[2], charData[3], charData[4], charData[5]);
         if (canAllocate)
             Nan::ThrowError("Failed to decompress data");
         isValid = false;
@@ -196,26 +202,26 @@ NAN_METHOD(EnvWrap::compress) {
 }
 
 
-// This file contains code from the node-lmdb project
-// Copyright (c) 2013-2017 Timur Kristóf
-// Copyright (c) 2021 Kristopher Tate
-// Licensed to you under the terms of the MIT license
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
+extern "C" EXTERN void compress(double ewPointer, double compressionJSPointer) {
+    EnvWrap* ew = (EnvWrap*) (size_t) ewPointer;
+    uint64_t compressionPointer;
+    double* compressionAddress = (double*) (size_t) compressionJSPointer;
+    compressionPointer = std::atomic_exchange((std::atomic<int64_t>*) compressionAddress, (int64_t) 2);
+    if (compressionPointer > 1) {
+        Compression* compression = (Compression*)(size_t) * ((double*)&compressionPointer);
+        compression->compressInstruction(ew, compressionAddress);
+    }
+}
 
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-
+extern "C" EXTERN uint64_t newCompression(char* dictionary, uint32_t dictSize, uint32_t threshold) {
+    dictSize = (dictSize >> 3) << 3; // make sure it is word-aligned
+    Compression* compression = new Compression();
+    if ((size_t) dictionary < 10)
+        dictionary= nullptr;
+    compression->dictionary = dictionary;
+    compression->decompressTarget = dictionary + dictSize;
+    compression->decompressSize = 0;
+    compression->acceleration = 1;
+    compression->compressionThreshold = threshold;
+    return (uint64_t) compression;
+}

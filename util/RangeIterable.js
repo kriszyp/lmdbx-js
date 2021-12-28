@@ -3,16 +3,16 @@ if (!Symbol.asyncIterator) {
 	Symbol.asyncIterator = Symbol.for('Symbol.asyncIterator');
 }
 
-export class ArrayLikeIterable {
+export class RangeIterable {
 	constructor(sourceArray) {
 		if (sourceArray) {
-			this[Symbol.iterator] = sourceArray[Symbol.iterator].bind(sourceArray);
+			this.iterate = sourceArray[Symbol.iterator].bind(sourceArray);
 		}
 	}
 	map(func) {
 		let source = this;
-		let result = new ArrayLikeIterable();
-		result[Symbol.iterator] = (async) => {
+		let result = new RangeIterable();
+		result.iterate = (async) => {
 			let iterator = source[Symbol.iterator](async);
 			return {
 				next(resolvedResult) {
@@ -57,23 +57,26 @@ export class ArrayLikeIterable {
 		return result;
 	}
 	[Symbol.asyncIterator]() {
-		return this[Symbol.iterator](true);
+		return this.iterator = this.iterate();
+	}
+	[Symbol.iterator]() {
+		return this.iterator = this.iterate();
 	}
 	filter(func) {
 		return this.map(element => func(element) ? element : SKIP);
 	}
 
 	forEach(callback) {
-		let iterator = this[Symbol.iterator]();
+		let iterator = this.iterator = this.iterate();
 		let result;
 		while ((result = iterator.next()).done !== true) {
 			callback(result.value);
 		}
 	}
 	concat(secondIterable) {
-		let concatIterable = new ArrayLikeIterable();
-		concatIterable[Symbol.iterator] = (async) => {
-			let iterator = this[Symbol.iterator]();
+		let concatIterable = new RangeIterable();
+		concatIterable.iterate = (async) => {
+			let iterator = this.iterator = this.iterate();
 			let isFirst = true;
 			let concatIterator = {
 				next() {
@@ -96,6 +99,11 @@ export class ArrayLikeIterable {
 		};
 		return concatIterable;
 	}
+	next() {
+		if (!this.iterator)
+			this.iterator = this.iterate();
+		return this.iterator.next();
+	}
 	toJSON() {
 		if (this.asArray && this.asArray.forEach) {
 			return this.asArray;
@@ -107,7 +115,7 @@ export class ArrayLikeIterable {
 		if (this._asArray)
 			return this._asArray;
 		let promise = new Promise((resolve, reject) => {
-			let iterator = this[Symbol.iterator](true);
+			let iterator = this.iterate();
 			let array = [];
 			let iterable = this;
 			function next(result) {
