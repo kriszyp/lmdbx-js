@@ -167,8 +167,6 @@ NAN_METHOD(EnvWrap::open) {
     Nan::HandleScope scope;
 
     int rc;
-    MDBX_env_flags_t flags = MDBX_ENV_DEFAULTS;
-
     // Get the wrapper
     EnvWrap *ew = Nan::ObjectWrap::Unwrap<EnvWrap>(info.This());
 
@@ -177,7 +175,7 @@ NAN_METHOD(EnvWrap::open) {
     }
     Local<Object> options = Local<Object>::Cast(info[0]);
     Local<Number> flagsValue = Local<Number>::Cast(info[1]);
-    int flags = flagsValue->IntegerValue(Nan::GetCurrentContext()).FromJust();
+    MDBX_env_flags_t flags = (MDBX_env_flags_t) flagsValue->IntegerValue(Nan::GetCurrentContext()).FromJust();
     Local<Number> jsFlagsValue = Local<Number>::Cast(info[2]);
     int jsFlags = jsFlagsValue->IntegerValue(Nan::GetCurrentContext()).FromJust();
 
@@ -206,12 +204,12 @@ NAN_METHOD(EnvWrap::open) {
         maxDbs = option->IntegerValue(Nan::GetCurrentContext()).FromJust();
 
 
-    mdb_size_t mapSize = 0;
+    size_t mapSize = 0;
     // Parse the mapSize option
     option = options->Get(Nan::GetCurrentContext(), Nan::New<String>("mapSize").ToLocalChecked()).ToLocalChecked();
     if (option->IsNumber())
         mapSize = option->IntegerValue(Nan::GetCurrentContext()).FromJust();
-    int pageSize = 8192;
+    int pageSize = 4096;
     // Parse the mapSize option
     option = options->Get(Nan::GetCurrentContext(), Nan::New<String>("pageSize").ToLocalChecked()).ToLocalChecked();
     if (option->IsNumber())
@@ -222,36 +220,20 @@ NAN_METHOD(EnvWrap::open) {
     if (option->IsNumber())
         maxReaders = option->IntegerValue(Nan::GetCurrentContext()).FromJust();
 
-    uint8_t* encryptKey = nullptr;
-    Local<Value> encryptionKey = options->Get(Nan::GetCurrentContext(), Nan::New<String>("encryptionKey").ToLocalChecked()).ToLocalChecked();
-    if (!encryptionKey->IsUndefined()) {
-        unsigned int l = Local<String>::Cast(encryptionKey)->Length();
-        encryptKey = new uint8_t[l];
-        int utfWritten = 0;
-        Local<String>::Cast(encryptionKey)->WriteUtf8(Isolate::GetCurrent(),
-            (char*) encryptKey, l, &utfWritten, v8::String::WriteOptions::NO_NULL_TERMINATION);
-        if (utfWritten != 32) {
-            return Nan::ThrowError("Encryption key must be 32 bytes long");
-        }
-        #ifndef MDB_RPAGE_CACHE
-        return Nan::ThrowError("Encryption not supported with data format version 1");
-        #endif
-    }
-
     rc = ew->openEnv(flags, jsFlags, (const char*)pathBytes, keyBuffer, compression, maxDbs, maxReaders, mapSize, pageSize, (char*)encryptKey);
     delete pathBytes;
     if (rc < 0)
-        return throwLmdbError(rc);
+        return throwLmdbxError(rc);
     node::AddEnvironmentCleanupHook(Isolate::GetCurrent(), cleanup, ew);
     return info.GetReturnValue().Set(Nan::New<Number>(rc));
 }
 int EnvWrap::openEnv(int flags, int jsFlags, const char* path, char* keyBuffer, Compression* compression, int maxDbs,
-        int maxReaders, mdb_size_t mapSize, int pageSize, char* encryptionKey) {
+        int maxReaders, size_t mapSize, int pageSize, char* encryptionKey) {
     pthread_mutex_lock(envsLock);
     this->keyBuffer = keyBuffer;
     this->compression = compression;
     this->jsFlags = jsFlags;
-    MDB_env* env = this->env;
+    MDBX_env* env = this->env;
     for (auto envPath = envs.begin(); envPath != envs.end();) {
         char* existingPath = envPath->path;
         if (!strcmp(existingPath, path)) {
@@ -274,7 +256,7 @@ int EnvWrap::openEnv(int flags, int jsFlags, const char* path, char* keyBuffer, 
         fprintf(stderr, "You chose to use MDBX_NOLOCK which is not officially supported by node-lmdb. You have been warned!\n");
     }
 
-    // Set MDB_NOTLS to enable multiple read-only transactions on the same thread (in this case, the nodejs main thread)
+    // Set MDBX_NOTLS to enable multiple read-only transactions on the same thread (in this case, the nodejs main thread)
     flags |= MDBX_NOTLS;
     // TODO: make file attributes configurable
     // *String::Utf8Value(Isolate::GetCurrent(), path)
@@ -282,7 +264,7 @@ int EnvWrap::openEnv(int flags, int jsFlags, const char* path, char* keyBuffer, 
     mdbx_env_get_flags(env, (unsigned int*) &flags);
 
     if (rc != 0) {
-        mdb_env_close(env);
+        mdbx_env_close(env);
         goto fail;
     }
     env_path_t envPath;
@@ -669,7 +651,7 @@ extern "C" EXTERN int commitEnvTxn(double ewPointer) {
     int rc = 0;
     if (currentTxn->flags & TXN_ABORTABLE) {
         //fprintf(stderr, "txn_commit\n");
-        rc = mdb_txn_commit(currentTxn->txn);
+        rc = mdbx_txn_commit(currentTxn->txn);
     }
     ew->writeTxn = currentTxn->parent;
     if (!ew->writeTxn) {
@@ -686,7 +668,7 @@ extern "C" EXTERN void abortEnvTxn(double ewPointer) {
     EnvWrap* ew = (EnvWrap*) (size_t) ewPointer;
     TxnTracked *currentTxn = ew->writeTxn;
     if (currentTxn->flags & TXN_ABORTABLE) {
-        mdb_txn_abort(currentTxn->txn);
+        mdbx_txn_abort(currentTxn->txn);
     } else {
         Nan::ThrowError("Can not abort this transaction");
     }
@@ -838,9 +820,9 @@ void EnvWrap::setupExports(Local<Object> exports) {
 }
 
 extern "C" EXTERN int64_t envOpen(int flags, int jsFlags, char* path, char* keyBuffer, double compression, int maxDbs,
-        int maxReaders, mdb_size_t mapSize, int pageSize, char* encryptionKey) {
+        int maxReaders, size_t mapSize, int pageSize, char* encryptionKey) {
     EnvWrap* ew = new EnvWrap();
-    int rc = mdb_env_create(&(ew->env));
+    int rc = mdbx_env_create(&(ew->env));
     if (rc)
         return rc;
     rc = ew->openEnv(flags, jsFlags, path, keyBuffer, (Compression*) (size_t) compression,
@@ -851,11 +833,11 @@ extern "C" EXTERN int64_t envOpen(int flags, int jsFlags, char* path, char* keyB
 }
 
 extern "C" EXTERN uint32_t getMaxKeySize(double ew) {
-    return mdb_env_get_maxkeysize(((EnvWrap*) (size_t) ew)->env);
+    return mdbx_env_get_maxkeysize(((EnvWrap*) (size_t) ew)->env);
 }
 extern "C" EXTERN int32_t readerCheck(double ew) {
     int rc, dead;
-    rc = mdb_reader_check(((EnvWrap*) (size_t) ew)->env, &dead);
+    rc = mdbx_reader_check(((EnvWrap*) (size_t) ew)->env, &dead);
     return rc || dead;
 }
 extern "C" EXTERN int64_t openDbi(double ewPointer, int flags, char* name, int keyType, double compression) {
