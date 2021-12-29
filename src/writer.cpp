@@ -479,7 +479,7 @@ extern "C" EXTERN int32_t envWrite(double ewPointer, double instructionAddress) 
 	else if (ew->writeWorker) {
 		pthread_cond_signal(ew->writingCond);
 	}
-	if (rc && !(rc == MDB_KEYEXIST || rc == MDB_NOTFOUND))
+	if (rc && !(rc == MDBX_KEYEXIST || rc == MDBX_NOTFOUND))
 		return rc;
 	return 0;
 }
