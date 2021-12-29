@@ -117,11 +117,11 @@ NAN_METHOD(TxnWrap::ctor) {
 int TxnWrap::begin(EnvWrap *ew, unsigned int flags) {
     this->ew = ew;
     this->flags = flags;
-    MDB_env *env = ew->env;
+    MDBX_env *env = ew->env;
     unsigned int envFlags;
-    mdb_env_get_flags(env, &envFlags);
-    if (flags & MDB_RDONLY) {
-        mdb_txn_begin(env, nullptr, flags & 0xf0000, &this->txn);
+    mdbx_env_get_flags(env, &envFlags);
+    if (flags & MDBX_RDONLY) {
+        mdbx_txn_begin(env, nullptr, flags & 0xf0000, &this->txn);
     } else {
         //fprintf(stderr, "begin sync txn %i\n", flags);
 
@@ -138,11 +138,11 @@ int TxnWrap::begin(EnvWrap *ew, unsigned int flags) {
 
         if (txn) {
             if (flags & TXN_ABORTABLE) {
-                if (envFlags & MDB_WRITEMAP)
+                if (envFlags & MDBX_WRITEMAP)
                     flags &= ~TXN_ABORTABLE;
                 else {
                     // child txn
-                    mdb_txn_begin(env, this->txn, flags & 0xf0000, &this->txn);
+                    mdbx_txn_begin(env, this->txn, flags & 0xf0000, &this->txn);
                     TxnTracked* childTxn = new TxnTracked(txn, flags);
                     childTxn->parent = ew->writeTxn;
                     ew->writeTxn = childTxn;
@@ -150,14 +150,14 @@ int TxnWrap::begin(EnvWrap *ew, unsigned int flags) {
                 }
             }
         } else {
-            mdb_txn_begin(env, nullptr, flags & 0xf0000, &this->txn);
+            mdbx_txn_begin(env, nullptr, flags & 0xf0000, &this->txn);
             flags |= TXN_ABORTABLE;
         }
         ew->writeTxn = new TxnTracked(txn, flags);
         return 0;
     }
     // Set the current write transaction
-    if (0 == (flags & MDB_RDONLY)) {
+    if (0 == (flags & MDBX_RDONLY)) {
         ew->currentWriteTxn = this;
     }
     else {
@@ -169,28 +169,28 @@ int TxnWrap::begin(EnvWrap *ew, unsigned int flags) {
 }
 extern "C" EXTERN void resetTxn(double twPointer, int flags) {
     TxnWrap* tw = (TxnWrap*) (size_t) twPointer;
-    mdb_txn_reset(tw->txn);
+    mdbx_txn_reset(tw->txn);
 }
 extern "C" EXTERN int renewTxn(double twPointer, int flags) {
     TxnWrap* tw = (TxnWrap*) (size_t) twPointer;
-    return mdb_txn_renew(tw->txn);
+    return mdbx_txn_renew(tw->txn);
 }
 /*extern "C" EXTERN int commitTxn(double twPointer) {
     TxnWrap* tw = (TxnWrap*) (size_t) twPointer;
     int rc;
     WriteWorker* writeWorker = tw->ew->writeWorker;
     if (writeWorker) {
-        rc = mdb_txn_commit(tw->txn);
+        rc = mdbx_txn_commit(tw->txn);
         pthread_mutex_unlock(tw->ew->writingLock);
     }
     else
-        rc = mdb_txn_commit(tw->txn);
+        rc = mdbx_txn_commit(tw->txn);
     tw->removeFromEnvWrap();
     return rc;
 }*/
 extern "C" EXTERN void abortTxn(double twPointer) {
     TxnWrap* tw = (TxnWrap*) (size_t) twPointer;
-    mdb_txn_abort(tw->txn);
+    mdbx_txn_abort(tw->txn);
     tw->removeFromEnvWrap();
 }
 

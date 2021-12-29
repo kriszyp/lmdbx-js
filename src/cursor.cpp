@@ -305,7 +305,7 @@ void CursorWrap::iterate(
 }
 extern "C" EXTERN int cursorIterate(double cwPointer) {
     CursorWrap *cw = (CursorWrap*) (size_t) cwPointer;
-    MDB_val key, data;
+    MDBX_val key, data;
     int rc = mdbx_cursor_get(cw->cursor, &key, &data, cw->iteratingOp);
     return cw->returnEntry(rc, key, data);
 }
@@ -318,8 +318,8 @@ NAN_METHOD(CursorWrap::getCurrentValue) {
 }
 extern "C" EXTERN int cursorCurrentValue(double cwPointer) {
     CursorWrap *cw = (CursorWrap*) (size_t) cwPointer;
-    MDB_val key, data;
-    int rc = mdbx_cursor_get(cw->cursor, &key, &data, MDB_GET_CURRENT);
+    MDBX_val key, data;
+    int rc = mdbx_cursor_get(cw->cursor, &key, &data, MDBX_GET_CURRENT);
     return cw->returnEntry(rc, key, data);
 }
 

@@ -27,8 +27,8 @@ DbiWrap::~DbiWrap() {
     // The above DbiWrap objects would both wrap the same MDBX_dbi, and if closing the first one called mdbx_dbi_close,
     // that'd also render the second DbiWrap instance unusable.
     //
-    // For this reason, we will never call mdb_dbi_close
-    // NOTE: according to LMDB authors, it is perfectly fine if mdb_dbi_close is never called on an MDB_dbi
+    // For this reason, we will never call mdbx_dbi_close
+    // NOTE: according to LMDB authors, it is perfectly fine if mdbx_dbi_close is never called on an MDBX_dbi
 }
 
 NAN_METHOD(DbiWrap::ctor) {
@@ -172,23 +172,23 @@ NAN_METHOD(DbiWrap::ctor) {
 }
 
 int DbiWrap::open(int flags, char* name, bool hasVersions, LmdbKeyType keyType, Compression* compression) {
-    MDB_txn* txn = ew->getReadTxn();
+    MDBX_txn* txn = ew->getReadTxn();
     this->hasVersions = hasVersions;
     this->compression = compression;
     this->keyType = keyType;
     flags &= ~HAS_VERSIONS;
     if (keyType == LmdbKeyType::Uint32Key)
-        flags |= MDB_INTEGERKEY;
-    int rc = mdb_dbi_open(txn, name, flags, &this->dbi);
+        flags |= MDBX_INTEGERKEY;
+    int rc = mdbx_dbi_open(txn, name, flags, &this->dbi);
     if (rc == EACCES) {
         if (!ew->writeTxn) {
-            rc = mdb_txn_begin(ew->env, nullptr, 0, &txn);
+            rc = mdbx_txn_begin(ew->env, nullptr, 0, &txn);
             if (!rc) {
-                rc = mdb_dbi_open(txn, name, flags, &this->dbi);
+                rc = mdbx_dbi_open(txn, name, flags, &this->dbi);
                 if (rc)
-                    mdb_txn_abort(txn);
+                    mdbx_txn_abort(txn);
                 else
-                    mdb_txn_commit(txn);
+                    mdbx_txn_commit(txn);
             }
         }
     }
@@ -196,7 +196,7 @@ int DbiWrap::open(int flags, char* name, bool hasVersions, LmdbKeyType keyType, 
         return rc;
     this->isOpen = true;
     if (keyType == LmdbKeyType::DefaultKey && name) { // use the fast compare, but can't do it if we have db table/names mixed in
-        mdb_set_compare(txn, dbi, compareFast);
+        mdbx_set_compare(txn, dbi, compareFast);
     }
 
     return 0;
@@ -294,9 +294,9 @@ extern "C" EXTERN uint32_t dbiGetByBinary(double dwPointer, uint32_t keySize) {
 }
 extern "C" EXTERN int64_t openCursor(double dwPointer) {
     DbiWrap* dw = (DbiWrap*) (size_t) dwPointer;
-    MDB_cursor *cursor;
-    MDB_txn *txn = dw->ew->getReadTxn();
-    int rc = mdb_cursor_open(txn, dw->dbi, &cursor);
+    MDBX_cursor *cursor;
+    MDBX_txn *txn = dw->ew->getReadTxn();
+    int rc = mdbx_cursor_open(txn, dw->dbi, &cursor);
     if (rc)
         return rc;
     CursorWrap* cw = new CursorWrap(cursor);
@@ -392,16 +392,16 @@ extern "C" EXTERN int prefetch(double dwPointer, double keysPointer) {
 }
 
 int DbiWrap::prefetch(uint32_t* keys) {
-    MDB_txn* txn;
-    mdb_txn_begin(ew->env, nullptr, MDB_RDONLY, &txn);
-    MDB_val key;
-    MDB_val data;
+    MDBX_txn* txn;
+    mdbx_txn_begin(ew->env, nullptr, MDBX_RDONLY, &txn);
+    MDBX_val key;
+    MDBX_val data;
     unsigned int flags;
-    mdb_dbi_flags(txn, dbi, &flags);
-    bool dupSort = flags & MDB_DUPSORT;
+    mdbx_dbi_flags(txn, dbi, &flags);
+    bool dupSort = flags & MDBX_DUPSORT;
     int effected = 0;
-    MDB_cursor *cursor;
-    int rc = mdb_cursor_open(txn, dbi, &cursor);
+    MDBX_cursor *cursor;
+    int rc = mdbx_cursor_open(txn, dbi, &cursor);
     if (rc)
         return rc;
     while((key.mv_size = *keys++) > 0) {
@@ -414,7 +414,7 @@ int DbiWrap::prefetch(uint32_t* keys) {
         }
         key.mv_data = (void*) keys;
         keys += (key.mv_size + 12) >> 2;
-        int rc = mdb_cursor_get(cursor, &key, &data, MDB_SET_KEY);
+        int rc = mdbx_cursor_get(cursor, &key, &data, MDBX_SET_KEY);
         while (!rc) {
             // access one byte from each of the pages to ensure they are in the OS cache,
             // potentially triggering the hard page fault in this thread
@@ -424,13 +424,13 @@ int DbiWrap::prefetch(uint32_t* keys) {
                 effected += *(((uint8_t*)data.mv_data) + (i << 12));
             }
             if (dupSort) // in dupsort databases, access the rest of the values
-                rc = mdb_cursor_get(cursor, &key, &data, MDB_NEXT_DUP);
+                rc = mdbx_cursor_get(cursor, &key, &data, MDBX_NEXT_DUP);
             else
                 rc = 1; // done
         }
     }
-    mdb_cursor_close(cursor);
-    mdb_txn_abort(txn);
+    mdbx_cursor_close(cursor);
+    mdbx_txn_abort(txn);
     return effected;
 }
 
