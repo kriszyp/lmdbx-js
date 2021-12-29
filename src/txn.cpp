@@ -87,7 +87,7 @@ NAN_METHOD(TxnWrap::ctor) {
             }
         }
         //fprintf(stderr, "txn_begin from txn.cpp %u %p\n", flags, parentTxn);
-        int rc = mdbx_txn_begin(ew->env, parentTxn, flags, &txn);
+        int rc = mdbx_txn_begin(ew->env, parentTxn, (MDBX_txn_flags_t) flags, &txn);
         if (rc != 0) {
             if (rc == EINVAL) {
                 return Nan::ThrowError("Invalid parameter, which on MacOS is often due to more transactions than available robust locked semaphors (see docs for more info)");
@@ -121,7 +121,7 @@ int TxnWrap::begin(EnvWrap *ew, unsigned int flags) {
     unsigned int envFlags;
     mdbx_env_get_flags(env, &envFlags);
     if (flags & MDBX_RDONLY) {
-        mdbx_txn_begin(env, nullptr, flags & 0xf0000, &this->txn);
+        mdbx_txn_begin(env, nullptr, (MDBX_txn_flags_t) flags & 0xf0000, &this->txn);
     } else {
         //fprintf(stderr, "begin sync txn %i\n", flags);
 
@@ -142,7 +142,7 @@ int TxnWrap::begin(EnvWrap *ew, unsigned int flags) {
                     flags &= ~TXN_ABORTABLE;
                 else {
                     // child txn
-                    mdbx_txn_begin(env, this->txn, flags & 0xf0000, &this->txn);
+                    mdbx_txn_begin(env, this->txn, (MDBX_txn_flags_t) flags & 0xf0000, &this->txn);
                     TxnTracked* childTxn = new TxnTracked(txn, flags);
                     childTxn->parent = ew->writeTxn;
                     ew->writeTxn = childTxn;
@@ -150,7 +150,7 @@ int TxnWrap::begin(EnvWrap *ew, unsigned int flags) {
                 }
             }
         } else {
-            mdbx_txn_begin(env, nullptr, flags & 0xf0000, &this->txn);
+            mdbx_txn_begin(env, nullptr, (MDBX_txn_flags_t) flags & 0xf0000, &this->txn);
             flags |= TXN_ABORTABLE;
         }
         ew->writeTxn = new TxnTracked(txn, flags);
