@@ -175,7 +175,7 @@ NAN_METHOD(EnvWrap::open) {
     }
     Local<Object> options = Local<Object>::Cast(info[0]);
     Local<Number> flagsValue = Local<Number>::Cast(info[1]);
-    MDBX_env_flags_t flags = (MDBX_env_flags_t) flagsValue->IntegerValue(Nan::GetCurrentContext()).FromJust();
+    int flags = flagsValue->IntegerValue(Nan::GetCurrentContext()).FromJust();
     Local<Number> jsFlagsValue = Local<Number>::Cast(info[2]);
     int jsFlags = jsFlagsValue->IntegerValue(Nan::GetCurrentContext()).FromJust();
 
@@ -220,7 +220,7 @@ NAN_METHOD(EnvWrap::open) {
     if (option->IsNumber())
         maxReaders = option->IntegerValue(Nan::GetCurrentContext()).FromJust();
 
-    rc = ew->openEnv(flags, jsFlags, (const char*)pathBytes, keyBuffer, compression, maxDbs, maxReaders, mapSize, pageSize, (char*)encryptKey);
+    rc = ew->openEnv(flags, jsFlags, (const char*)pathBytes, keyBuffer, compression, maxDbs, maxReaders, mapSize, pageSize);
     delete pathBytes;
     if (rc < 0)
         return throwLmdbxError(rc);
@@ -228,7 +228,7 @@ NAN_METHOD(EnvWrap::open) {
     return info.GetReturnValue().Set(Nan::New<Number>(rc));
 }
 int EnvWrap::openEnv(int flags, int jsFlags, const char* path, char* keyBuffer, Compression* compression, int maxDbs,
-        int maxReaders, size_t mapSize, int pageSize, char* encryptionKey) {
+        int maxReaders, size_t mapSize, int pageSize) {
     pthread_mutex_lock(envsLock);
     this->keyBuffer = keyBuffer;
     this->compression = compression;
@@ -250,18 +250,15 @@ int EnvWrap::openEnv(int flags, int jsFlags, const char* path, char* keyBuffer, 
     if (rc) goto fail;
     rc = mdbx_env_set_maxreaders(env, maxReaders);
     if (rc) goto fail;
-    rc = mdbx_env_set_geometry(ew->env, -1, -1, mapSize, -1, -1, pageSize);
+    rc = mdbx_env_set_geometry(env, -1, -1, mapSize, -1, -1, pageSize);
     if (rc) goto fail;
-    if (flags & MDBX_NOLOCK) {
-        fprintf(stderr, "You chose to use MDBX_NOLOCK which is not officially supported by node-lmdb. You have been warned!\n");
-    }
 
     // Set MDBX_NOTLS to enable multiple read-only transactions on the same thread (in this case, the nodejs main thread)
-    flags |= MDBX_NOTLS;
+    flags |= (int) MDBX_NOTLS;
     // TODO: make file attributes configurable
     // *String::Utf8Value(Isolate::GetCurrent(), path)
-    rc = mdbx_env_open(env, path, flags, 0664);
-    mdbx_env_get_flags(env, (unsigned int*) &flags);
+    rc = mdbx_env_open(env, path, (MDBX_env_flags_t) flags, 0664);
+    mdbx_env_get_flags(env, &flags);
 
     if (rc != 0) {
         mdbx_env_close(env);
@@ -820,13 +817,13 @@ void EnvWrap::setupExports(Local<Object> exports) {
 }
 
 extern "C" EXTERN int64_t envOpen(int flags, int jsFlags, char* path, char* keyBuffer, double compression, int maxDbs,
-        int maxReaders, size_t mapSize, int pageSize, char* encryptionKey) {
+        int maxReaders, size_t mapSize, int pageSize) {
     EnvWrap* ew = new EnvWrap();
     int rc = mdbx_env_create(&(ew->env));
     if (rc)
         return rc;
     rc = ew->openEnv(flags, jsFlags, path, keyBuffer, (Compression*) (size_t) compression,
-        maxDbs, maxReaders, mapSize, pageSize, encryptionKey);
+        maxDbs, maxReaders, mapSize, pageSize);
     if (rc)
         return rc;
     return (ssize_t) ew;

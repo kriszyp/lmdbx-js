@@ -27,8 +27,8 @@ if (!libPath || !exists(libPath)) {
 }
 let lmdbxLib = Deno.dlopen(libPath, {
     // const char* path, char* keyBuffer, Compression* compression, int jsFlags, int flags, int maxDbs,
-    // int maxReaders, mdb_size_t mapSize, int pageSize, char* encryptionKey
-	envOpen: { parameters: ['u32', 'u32', 'pointer', 'pointer', 'f64', 'u32', 'u32', 'usize', 'u32', 'pointer'], result: 'i64'},
+    // int maxReaders, mdb_size_t mapSize, int pageSize
+	envOpen: { parameters: ['u32', 'u32', 'pointer', 'pointer', 'f64', 'u32', 'u32', 'usize', 'u32'], result: 'i64'},
     closeEnv: { parameters: ['f64'], result: 'void'},
     freeData: { parameters: ['f64'], result: 'void'},
     getAddress: { parameters: ['pointer'], result: 'usize'},
@@ -103,7 +103,7 @@ let keyBytes: Uint8Array;
 class Env extends CBridge {
     open(options: any, flags: number, jsFlags: number) {
         let rc = envOpen(flags, jsFlags, toCString(options.path), keyBytes = options.keyBytes, 0,
-            options.maxDbs || 12, options.maxReaders || 126, options.mapSize, options.pageSize, new Uint8Array(0)) as number;
+            options.maxDbs || 12, options.maxReaders || 126, options.mapSize, options.pageSize) as number;
         this.address = checkError(rc);
         registry.register(this, this.address);
         return 0;

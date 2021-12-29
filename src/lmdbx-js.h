@@ -279,7 +279,7 @@ public:
     static void setupExports(Local<Object> exports);
     void closeEnv();
     int openEnv(int flags, int jsFlags, const char* path, char* keyBuffer, Compression* compression, int maxDbs,
-        int maxReaders, size_t mapSize, int pageSize, char* encryptionKey);
+        int maxReaders, size_t mapSize, int pageSize);
     
     /*
         Constructor of the database environment. You need to `open()` it before you can use it.
