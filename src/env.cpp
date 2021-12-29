@@ -258,7 +258,7 @@ int EnvWrap::openEnv(int flags, int jsFlags, const char* path, char* keyBuffer, 
     // TODO: make file attributes configurable
     // *String::Utf8Value(Isolate::GetCurrent(), path)
     rc = mdbx_env_open(env, path, (MDBX_env_flags_t) flags, 0664);
-    mdbx_env_get_flags(env, &flags);
+    mdbx_env_get_flags(env, (unsigned int*) &flags);
 
     if (rc != 0) {
         mdbx_env_close(env);
