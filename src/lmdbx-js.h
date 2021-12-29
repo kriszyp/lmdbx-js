@@ -144,7 +144,7 @@ NAN_METHOD(lmdbxError);
 //NAN_METHOD(getBufferForAddress);
 NAN_METHOD(getViewAddress);
 NAN_METHOD(getAddress);
-NAN_METHOD(lmdbNativeFunctions);
+NAN_METHOD(lmdbxNativeFunctions);
 
 #ifndef thread_local
 #ifdef __GNUC__
