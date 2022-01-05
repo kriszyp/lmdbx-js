@@ -138,7 +138,7 @@ NAN_METHOD(DbiWrap::stat) {
 
     DbiWrap *dw = Nan::ObjectWrap::Unwrap<DbiWrap>(info.This());
     MDBX_stat stat;
-    mdbx_dbi_stat(dw->ew->getReadTxn(), dw->dbi, &stat, sizeof MDBX_stat);
+    mdbx_dbi_stat(dw->ew->getReadTxn(), dw->dbi, &stat, sizeof(MDBX_stat));
 
     Local<Context> context = Nan::GetCurrentContext();
     Local<Object> obj = Nan::New<Object>();
