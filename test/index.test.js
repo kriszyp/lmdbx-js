@@ -8,14 +8,23 @@ import { unlinkSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname } from 'path'
 import { encoder as orderedBinaryEncoder } from 'ordered-binary/index.js'
+import inspector from 'inspector'
+//inspector.open(9330, null, true); debugger
 let nativeMethods, dirName = dirname(fileURLToPath(import.meta.url))
 
+<<<<<<< HEAD
 import { open, levelup, bufferToKeyValue, keyValueToBuffer, asBinary, ABORT } from '../node-index.js';
 import { ArrayLikeIterable } from '../util/ArrayLikeIterable.js'
 import inspector from 'inspector'
 //inspector.open(9330, null, true); //debugger
   
 describe('lmdbx-js', function() {
+=======
+import { open, levelup, bufferToKeyValue, keyValueToBuffer, asBinary, ABORT, IF_EXISTS } from '../node-index.js';
+import { RangeIterable } from '../util/RangeIterable.js'
+
+describe('lmdb-js', function() {
+>>>>>>> lmdb-js/master
   let testDirPath = path.resolve(dirName, './testdata-ls');
 
   // just to make a reasonable sized chunk of data...
@@ -61,9 +70,8 @@ describe('lmdbx-js', function() {
         //useWritemap: true,
         //noSync: true,
         //overlappingSync: true,
-        pageSize: 8192,
         maxReaders: 100,
-        eventTurnBatching: false,
+        eventTurnBatching: true,
         keyEncoder: orderedBinaryEncoder,
         compression: {
           threshold: 256,
@@ -96,6 +104,7 @@ describe('lmdbx-js', function() {
       return
     }
     it('zero length values', async function() {
+      await db; // should be able to await db even if nothing has happened
       db.put(5, asBinary(Buffer.from([])));
       await db2.put('key1', asBinary(Buffer.from([])));
       should.equal(db.getBinary(5).length, 0);
@@ -162,7 +171,8 @@ describe('lmdbx-js', function() {
         [ 'Test', 10010, 3 ]
       ]
       for (let key of keys)
-        await db.put(key, 3);
+        db.put(key, 3);
+      await db;
       for (let { key, value } of db.getRange({
         start: ['Test', null],
         end: ['Test', null],
@@ -217,7 +227,6 @@ describe('lmdbx-js', function() {
       let entry = db.getEntry('key1');
       entry.value.should.equal('Hello world!');
       entry.version.should.equal(53252);
-      console.log('starting ifVersion');
       (await db.ifVersion('key1', 777, () => {
         db.put('newKey', 'test', 6);
         db2.put('keyB', 'test', 6);
@@ -241,6 +250,23 @@ describe('lmdbx-js', function() {
       })
       should.equal(db.get('newKey'), 'changed')
       should.equal(result, true);
+
+      result = await db2.ifVersion('key-no-exist', IF_EXISTS, () => {
+        db.put('newKey', 'changed again', 7);
+      })
+      should.equal(db.get('newKey'), 'changed')
+      should.equal(result, false);
+
+      result = await db2.ifVersion('keyB', IF_EXISTS, () => {
+        db.put('newKey', 'changed again', 7);
+      })
+      should.equal(db.get('newKey'), 'changed again')
+      should.equal(result, true);
+
+      result = await db2.remove('key-no-exists');
+      should.equal(result, true);
+      result = await db2.remove('key-no-exists', IF_EXISTS);
+      should.equal(result, false);
     });
     it('string with compression and versions', async function() {
       let str = expand('Hello world!')
@@ -288,7 +314,7 @@ describe('lmdbx-js', function() {
       let buffer = db.encoder.encode(dataIn);
       if (typeof buffer == 'string')
         return
-      await db.put('key1',  asBinary(buffer));
+      await db.put('key1', asBinary(buffer));
       let dataOut = db.get('key1');
       dataOut.should.deep.equal(dataIn);
     });
@@ -314,7 +340,8 @@ describe('lmdbx-js', function() {
       let data1 = {foo: 1, bar: true}
       let data2 = {foo: 2, bar: false}
       db.put('key1',  data1);
-      await db.put('key2',  data2);
+      db.put('key2',  data2);
+      await db;
       let count = 0
       for (let { key, value } of db.getRange({start:'key', end:'keyz', snapshot: !acrossTransactions})) {
         if (acrossTransactions)
@@ -334,7 +361,8 @@ describe('lmdbx-js', function() {
       let data1 = {foo: 1, bar: true}
       let data2 = {foo: 2, bar: false}
       db.put('key1',  data1);
-      await db.put('key2',  data2);
+      db.put('key2',  data2);
+      await db;
       let count = 0;
       for (let { key, value } of db.getRange({start:'key', end:'keyz'})) {
         if (count > 0)
@@ -583,7 +611,11 @@ describe('lmdbx-js', function() {
           throw new Error('duplicate key returned')
         lastKey = key
       }
+<<<<<<< HEAD
     })
+=======
+    });
+>>>>>>> lmdb-js/master
     it('big keys', async function() {
       let keyBase = ''
       for (let i = 0; i < 1900; i++) {
@@ -610,6 +642,24 @@ describe('lmdbx-js', function() {
       await promise
       should.equal(db.get(returnedKeys[0]), undefined)
     });
+    it('prefetch', async function() {
+      await new Promise(resolve => db.prefetch(['key1', 'key2'], resolve));
+      console.log('done with first')
+      let key = ''
+      for (let i = 0; i < 1900; i++) {
+        key += 'A'
+      }
+      let keys = []
+      for (let i = 0; i < 20; i++) {
+        keys.push(key)
+      }
+      let value = keys.join(',')
+      await db.put(key, value);
+      await db.prefetch(keys);
+      let values = await db.getMany(keys);
+      should.equal(values.length, 20);
+      should.equal(values[3], value);
+    });
 
     it.only('invalid key', async function() {
       expect(() => db.get({ foo: 'bar' })).to.throw();
@@ -617,7 +667,7 @@ describe('lmdbx-js', function() {
       expect(() => db.put('x'.repeat(4027), 'hello')).to.throw();
       expect(() => db2.put('x', 'x'.repeat(4027))).to.throw();
       Array.from(db.getRange({ start: 'x', end: Buffer.from([])}))
-      expect(() => Array.from(db.getRange({ start: 'x'.repeat(4027)}))).to.throw();
+      //expect(() => Array.from(db.getRange({ start: 'x'.repeat(4027)}))).to.throw();
     });
     it.skip('put options (sync)', function() {
       db.putSync('zkey6', 'test', { append: true, version: 33 });
@@ -758,6 +808,26 @@ describe('lmdbx-js', function() {
         should.equal(db.get('key1'), 'test');
       }
     });
+    it('handle write transaction with hanging cursors', async function() {
+      db.put('c1', 'value1');
+      db.put('c2', 'value2');
+      db.put('c3', 'value3');
+      await db;
+      let iterator
+      db.transactionSync(() => {
+        if (db.cache) {
+          iterator = db.getRange({ start: 'c1' })[Symbol.iterator]();
+          should.equal(iterator.next().value.value, 'value1');
+        } else {
+          db.childTransaction(() => {
+            iterator = db.getRange({ start: 'c1' })[Symbol.iterator]();
+            should.equal(iterator.next().value.value, 'value1');
+          });
+        }
+        should.equal(iterator.next().value.value, 'value2');
+      });
+      should.equal(iterator.next().value.value, 'value3');
+    });
     it('mixed batches', async function() {
       let promise
       for (let i = 0; i < 20; i++) {
@@ -829,7 +899,6 @@ describe('lmdbx-js', function() {
     it('read and write with binary encoding', async function() {
       let dbBinary = db.openDB(Object.assign({
         name: 'mydb5',
-        create: true,
         encoding: 'binary'
       }));
       dbBinary.put('buffer', Buffer.from('hello'));
@@ -840,6 +909,27 @@ describe('lmdbx-js', function() {
       dbBinary.get('buffer').toString().should.equal('hello');
       dbBinary.get('Uint8Array')[1].should.equal(2);
       dbBinary.get('empty').length.should.equal(0);
+    });
+    it('read and write with binary encoding of key and value', async function() {
+      let dbBinary = db.openDB({
+        name: 'mydb-binary',
+        encoding: 'binary',
+        keyEncoding: 'binary'
+      });
+      
+      let k = Buffer.from("key");
+      let v = Buffer.from("value");
+      
+      await dbBinary.put(k, v);
+      let count = 0;
+      for (let { key, value } of dbBinary.getRange({})) {
+        should.equal(key.constructor, Buffer);
+        should.equal(key.length, 3);
+        should.equal(value.constructor, Buffer);
+        should.equal(value.length, 5);
+        count++;
+      }
+      should.equal(count, 1);
     });
     it.skip('read and write with binary methods', async function() {
       let dbBinary = db.openDB(Object.assign({
@@ -852,14 +942,38 @@ describe('lmdbx-js', function() {
       console.log(dbBinary.getBinaryLocation(3))
       console.log(dbBinary.getBinaryLocation(4))
     });
+    it('open and close with compression', async function() {
+      let data = ''
+      for (let i = 0; i < 100; i++) {
+        data += Math.random()
+      }
+      for (let i = 0; i < 100; i++) {
+        let db = open(testDirPath + '/test-close.mdb', {
+//          name: 'test-close',
+          compression: true,
+          overlappingSync: true,
+        });
+        let v = db.get('key')
+        v = db.get('key1')
+        v = db.get('key2')
+        v = db.get('key3')
+        db.put('key', data);
+        let promise = db.close();
+        db.put('key1', data);
+        await db.put('key2', data);
+        db.put('key3', data);
+        await promise;
+      }
+    })
     after(function(done) {
       db.get('key1');
       let iterator = db.getRange({})[Symbol.iterator]()
-      setTimeout(() => {
+      setTimeout(async () => {
         db.get('key1');
-        // should have open read and cursor transactions
-        db2.close();
-        db.close();
+        db.put('another', 'something');
+        // should have open read, write, and cursor transactions
+        await db2.close();
+        await db.close();
         if (options.encryptionKey) {
           return done();
         }
@@ -931,10 +1045,10 @@ describe('lmdbx-js', function() {
       console.log('closed')
     });
   });
-  describe('ArrayLikeIterable', function() {
+  describe('RangeIterable', function() {
     it('concat and iterate', async function() {
-      let a = new ArrayLikeIterable([1, 2, 3])
-      let b = new ArrayLikeIterable([4, 5, 6])
+      let a = new RangeIterable([1, 2, 3])
+      let b = new RangeIterable([4, 5, 6])
       let all = []
       for (let v of a.concat(b)) {
         all.push(v)
@@ -971,6 +1085,22 @@ describe('lmdbx-js', function() {
         lastPromise = strKeys.put(strKey, `${strKey}-value`)
       }
       await lastPromise
+    });
+  });
+  describe('Threads', function() {
+    this.timeout(10000);
+    it('will run a group of threads with read-only transactions', function(done) {
+      var child = spawn('node', [fileURLToPath(new URL('./threads.cjs', import.meta.url))]);
+      child.stdout.on('data', function(data) {
+        console.log(data.toString());
+      });
+      child.stderr.on('data', function(data) {
+        console.error(data.toString());
+      });
+      child.on('close', function(code) {
+        code.should.equal(0);
+        done();
+      });
     });
   });
 });

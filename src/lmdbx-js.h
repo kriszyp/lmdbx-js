@@ -49,6 +49,12 @@ using namespace node;
 #define __CPTHREAD_H__
 
 #ifdef _WIN32
+#define EXTERN __declspec(dllexport)
+# else
+#define EXTERN __attribute__((visibility("default")))
+#endif
+
+#ifdef _WIN32
 # include <windows.h>
 #else
 # include <pthread.h>
@@ -88,12 +94,12 @@ class Logging {
     static int initLogging();
 };
 
-enum class NodeLmdbxKeyType {
+enum class LmdbxKeyType {
 
-    // Invalid key (used internally by node-lmdb)
+    // Invalid key (used internally by lmdb-js)
     InvalidKey = -1,
     
-    // Default key (used internally by node-lmdb)
+    // Default key (used internally by lmdb-js)
     DefaultKey = 0,
 
     // UCS-2/UTF-16 with zero terminator - Appears to V8 as string
@@ -130,14 +136,15 @@ void consoleLog(const char *msg);
 void consoleLogN(int n);
 void setFlagFromValue(int *flags, int flag, const char *name, bool defaultValue, Local<Object> options);
 void writeValueToEntry(const Local<Value> &str, MDBX_val *val);
-NodeLmdbxKeyType keyTypeFromOptions(const Local<Value> &val, NodeLmdbxKeyType defaultKeyType = NodeLmdbxKeyType::DefaultKey);
+LmdbxKeyType keyTypeFromOptions(const Local<Value> &val, LmdbxKeyType defaultKeyType = LmdbxKeyType::DefaultKey);
 bool getVersionAndUncompress(MDBX_val &data, DbiWrap* dw);
 int compareFast(const MDBX_val *a, const MDBX_val *b);
 NAN_METHOD(setGlobalBuffer);
 NAN_METHOD(lmdbxError);
 //NAN_METHOD(getBufferForAddress);
+NAN_METHOD(getViewAddress);
 NAN_METHOD(getAddress);
-NAN_METHOD(getAddressShared);
+NAN_METHOD(lmdbxNativeFunctions);
 
 #ifndef thread_local
 #ifdef __GNUC__
@@ -183,29 +190,36 @@ const int RESUME_BATCH = 9996;
 const int USER_HAS_LOCK = 9995;
 const int SEPARATE_FLUSHED = 1;
 
-class WriteWorker : public Nan::AsyncProgressWorker {
+class WriteWorker {
   public:
-    WriteWorker(MDBX_env* env, EnvWrap* envForTxn, uint32_t* instructions, Nan::Callback *callback);
+    WriteWorker(MDBX_env* env, EnvWrap* envForTxn, uint32_t* instructions);
     void Write();
     MDBX_txn* txn;
     MDBX_txn* AcquireTxn(int* flags);
     void UnlockTxn();
-    void Execute(const ExecutionProgress& executionProgress);
-    void HandleProgressCallback(const char* data, size_t count);
-    void HandleOKCallback();
     int WaitForCallbacks(MDBX_txn** txn, bool allowCommit, uint32_t* target);
-    void ReportError(const char* error);
+    virtual void ReportError(const char* error);
+    virtual void SendUpdate();
     int interruptionStatus;
     bool finishedProgress;
+    bool hasError;
     EnvWrap* envForTxn;
     ~WriteWorker();
     uint32_t* instructions;
     int progressStatus;
-  private:
-    ExecutionProgress* executionProgress;
     MDBX_env* env;
 };
-
+class NanWriteWorker : public WriteWorker, public Nan::AsyncProgressWorker {
+  public:
+    NanWriteWorker(MDBX_env* env, EnvWrap* envForTxn, uint32_t* instructions, Nan::Callback *callback);
+    void Execute(const ExecutionProgress& executionProgress);
+    void HandleProgressCallback(const char* data, size_t count);
+    void HandleOKCallback();
+    void ReportError(const char* error);
+    void SendUpdate();
+  private:
+    ExecutionProgress* executionProgress;
+};
 class TxnTracked {
   public:
     TxnTracked(MDBX_txn *txn, unsigned int flags);
@@ -259,10 +273,13 @@ public:
     unsigned int jsFlags;
     char* keyBuffer;
     MDBX_txn* getReadTxn();
+    int pageSize;
 
     // Sets up exports for the Env constructor
     static void setupExports(Local<Object> exports);
     void closeEnv();
+    int openEnv(int flags, int jsFlags, const char* path, char* keyBuffer, Compression* compression, int maxDbs,
+        int maxReaders, size_t mapSize, int pageSize);
     
     /*
         Constructor of the database environment. You need to `open()` it before you can use it.
@@ -314,6 +331,7 @@ public:
         * path: path to the database environment
     */
     static NAN_METHOD(open);
+    static NAN_METHOD(getMaxKeySize);
 
     /*
         Resizes the maximal size of the memory map. It may be called if no transactions are active in this process.
@@ -443,6 +461,7 @@ public:
 
     // Remove the current TxnWrap from its EnvWrap
     void removeFromEnvWrap();
+    int begin(EnvWrap *ew, unsigned int flags);
 
     // Constructor (not exposed)
     static NAN_METHOD(ctor);
@@ -473,6 +492,7 @@ public:
 
 };
 
+const int HAS_VERSIONS = 0x1000;
 /*
     `Dbi`
     Represents a database instance in an environment.
@@ -481,7 +501,7 @@ public:
 class DbiWrap : public Nan::ObjectWrap {
 public:
     // Tells how keys should be treated
-    NodeLmdbxKeyType keyType;
+    LmdbxKeyType keyType;
     // Stores flags set when opened
     int flags;
     // The wrapped object
@@ -530,9 +550,13 @@ public:
     static NAN_METHOD(drop);
 
     static NAN_METHOD(stat);
+    static NAN_METHOD(prefetch);
+    int prefetch(uint32_t* keys);
+    int open(int flags, char* name, bool hasVersions, LmdbxKeyType keyType, Compression* compression);
 #if ENABLE_FAST_API && NODE_VERSION_AT_LEAST(16,6,0)
     static uint32_t getByBinaryFast(Local<Object> receiver_obj, uint32_t keySize, FastApiCallbackOptions& options);
 #endif
+    uint32_t doGetByBinary(uint32_t keySize);
     static void getByBinary(const v8::FunctionCallbackInfo<v8::Value>& info);
     static NAN_METHOD(getStringByBinary);
 };
@@ -568,23 +592,23 @@ class CursorWrap : public Nan::ObjectWrap {
 
 private:
 
-    // The wrapped object
-    MDBX_cursor *cursor;
-    // Stores how key is represented
-    NodeLmdbxKeyType keyType;
     // Key/data pair where the cursor is at, and ending key
     MDBX_val key, data, endKey;
     // Free function for the current key
     argtokey_callback_t freeKey;
-    MDBX_cursor_op iteratingOp;
-    int flags;
-    DbiWrap *dw;
-    MDBX_txn *txn;
-    
     template<size_t keyIndex, size_t optionsIndex>
     friend argtokey_callback_t cursorArgToKey(CursorWrap* cw, Nan::NAN_METHOD_ARGS_TYPE info, MDBX_val &key, bool &keyIsValid);
 
 public:
+    MDBX_cursor_op iteratingOp;    
+    MDBX_cursor *cursor;
+    // Stores how key is represented
+    LmdbxKeyType keyType;
+    int flags;
+    DbiWrap *dw;
+    MDBX_txn *txn;
+
+    // The wrapped object
     CursorWrap(MDBX_cursor *cursor);
     ~CursorWrap();
 

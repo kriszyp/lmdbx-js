@@ -1,4 +1,5 @@
-import { WeakLRUCache } from 'weak-lru-cache/index.js';
+import { WeakLRUCache } from './external.js';
+import { FAILED_CONDITION } from './write.js';
 let getLastVersion;
 const mapGet = Map.prototype.get;
 export const CachingStore = Store => class extends Store {
@@ -10,14 +11,14 @@ export const CachingStore = Store => class extends Store {
 				do {
 					let store = next.store;
 					if (store) {
-						if (next.flag & 1)
+						if (next.flag & FAILED_CONDITION)
 							next.store.cache.delete(next.key); // just delete it from the map
 						else {
 							let expirationPriority = next.valueSize >> 10;
 							let cache = next.store.cache;
 							let entry = mapGet.call(cache, next.key);
 							if (entry)
-								cache.used(entry, expirationPriority); // this will enter it into the LRFU
+								cache.used(entry, expirationPriority + 4); // this will enter it into the LRFU (with a little lower priority than a read)
 						}
 					}
 				} while (next != last && (next = next.next))
@@ -66,9 +67,13 @@ export const CachingStore = Store => class extends Store {
 			this.cache.set(id, entry);
 	}
 	put(id, value, version, ifVersion) {
-		// if (this.cache.get(id)) // if there is a cache entry, remove it from scheduledEntries and 
 		let result = super.put(id, value, version, ifVersion);
 		if (typeof id !== 'object') {
+			if (value && value['\x10binary-data\x02']) {
+				// don't cache binary data, since it will be decoded on get
+				this.cache.delete(id);
+				return result;
+			}	
 			// sync operation, immediately add to cache, otherwise keep it pinned in memory until it is committed
 			let entry = this.cache.setValue(id, value, !result || result.isSync ? 0 : -1);
 			if (version !== undefined)
@@ -97,9 +102,13 @@ export const CachingStore = Store => class extends Store {
 		this.cache.delete(id);
 		return super.removeSync(id, ifVersion);
 	}
-	clear() {
+	clearAsync(callback) {
 		this.cache.clear();
-		super.clear();
+		return super.clearAsync(callback);
+	}
+	clearSync() {
+		this.cache.clear();
+		super.clearSync();
 	}
 	childTransaction(execute) {
 		throw new Error('Child transactions are not supported in caching stores');

@@ -10,10 +10,9 @@ This package provides an extremly fastest and most efficient NodeJS key-value/da
 * Queueing asynchronous off-thread write operations with promise-based API
 * Simple transaction management
 * Iterable queries/cursors
-* Automated database growth
 * Record versioning and optimistic locking for scalability/concurrency
-* Optional native off-main-thread compression with high-performance LZ4 compression
-* And ridiculously fast and efficient:
+* Optional native off-main-thread compression with high-performance LZ4 compression <a href="https://github.com/kriszyp/db-benchmark"><img align="right" src="./assets/performance.png" width="380"/></a>
+* And ridiculously fast and efficient, with integrated (de)serialization, data retrieval can be several times faster than `JSON` alone
 
 This library is branched from [lmdb-js](https://github.com/DoctorEvidence/lmdb-js), and is maintained alongside lmdb-js, but adapted for _libmdbx_. _libmdbx_ provides some important improvements over LMDB; in particular, it offers significantly better management and collection of free-space (which can sometimes be a problem with LMDB). There are a number of additional features available libmdbx, that maybe be exposed in lmdbx-js at some point, as well.
 
@@ -24,6 +23,7 @@ However, there are only a few reasons for remaining with the core LMDB/lmdb-js p
 
 This library is published to the NPM package `lmdbx` (the 0.1.x versions were published to `lmdbx-store`), and can be installed with:
 ```npm install lmdbx```
+Or in Deno can be directly used from the [deno.land `lmdbx` module](https://deno.land/x/lmdbx/mod.ts) (see [Deno instructions](#deno)).
 
 This library has minimal, tightly-controlled, and maintained dependencies to ensure stability, security, and efficiency. It supports both native ESM and CJS usage.
 
@@ -45,6 +45,7 @@ This library provides optional compression using LZ4 that works in conjunction w
 An _libmdbx_ database instance is created by using `open` export from the main module:
 ```
 import { open } from 'lmdb'; // or require
+// or in deno: import { open } from 'https://deno.land/x/lmdb/mod.ts';
 let myDB = open({
 	path: 'my-db',
 	// any options go here, we can turn on compression like this:
@@ -69,7 +70,7 @@ You can store a wide variety of JavaScript values and data structures in this li
 * `cbor` - This specifies all values use the CBOR format, which requires that the [cbor-x](https://github.com/kriszyp/cbor-x) package be installed. This package is based on [msgpackr](https://github.com/kriszyp/msgpackr) and supports all the same options.
 * `json` - All values are stored by serializing the value as JSON (using JSON.stringify) and encoded with UTF-8. Values are decoded and parsed on retrieval using JSON.parse. Generally this does not perform as all as msgpack, nor support as many value types.
 * `string` - All values should be strings and stored by encoding with UTF-8. Values are returned as strings from `get`.
-* `binary` - Values are returned as (Node) buffer objects, representing the raw binary data. Note that creating buffer objects in NodeJS has some overhead and while this is fast and valuable direct storage of binary data, the data encodings provides faster and more optimized process for serializing and deserializing structured data.
+* `binary` - Values are returned as binary arrays (`Buffer` objects in NodeJS), representing the raw binary data. Note that creating buffer objects has some overhead and while this is fast and valuable direct storage of binary data, the data encodings provides faster and more optimized process for serializing and deserializing structured data.
 * `ordered-binary` - Use the same encoding as the default encoding for keys, which serializes any JS primitive value with consistent ordering. This is primarily useful in `dupSort` databases where data values are ordered, and having consistent key and value ordering is helpful.
 
 In addition, you can use `asBinary` to directly store a buffer or Uint8Array as a value, bypassing any encoding.
@@ -91,7 +92,7 @@ Symbol.for('even symbols')
 ['hello', 'world']
 Buffer.from([255]) // buffers can be used directly, 255 is higher than any byte produced by primitives
 ```
-You can override the default encoding of keys, and cause keys to be returned as node buffers using the `keyEncoding: 'binary'` database option (generally slower), use `keyEncoding: 'uint32'` for keys that are strictly 32-bit unsigned integers, or provide a custom key encoder/decoder with `keyEncoder` (see custom key encoding).
+You can override the default encoding of keys, and cause keys to be returned as binary arrays (`Buffer`s in NodeJS) using the `keyEncoding: 'binary'` database option (generally slower), use `keyEncoding: 'uint32'` for keys that are strictly 32-bit unsigned integers, or provide a custom key encoder/decoder with `keyEncoder` (see custom key encoding).
 
 Once you created have a db, the following methods are available:
 
@@ -261,8 +262,8 @@ let buffer = encode(myValue) // if we have already serialized a value, perhaps t
 db.put(key, asBinary(buffer)) // we can directly store the encoded value
 ```
 
-### `close(): void`
-This will close the current db. This closes the underlying _libmdbx_ database, and if this is the root database (opened with `open` as opposed to `db.openDB`), it will close the environment (and child databases will no longer be able to interact with the database).
+### `close(): Promise`
+This will close the current db. This closes the underlying _libmdbx_ database, and if this is the root database (opened with `open` as opposed to `db.openDB`), it will close the environment (and child databases will no longer be able to interact with the database). This is asynchronous, waiting for any outstanding transactions to finish before closing the database.
 
 ### `db.doesExist(key, valueOrVersion): boolean`
 This checks if an entry exists for the given key, and optionally verifies that the version or value exists. If this is a `dupSort` enabled database, you can provide the key and value to check if that key/value entry exists. If you are using a versioned database, you can provide a version number to verify if the entry for the provided key has the specific version number. This returns true if the entry does exist.
@@ -272,6 +273,12 @@ This will retrieve the binary data at the specified key. This is just like `get`
 
 ### `db.getBinaryFast(key): Buffer`
 This will retrieve the binary data at the specified key, like `getBinary`, except it uses reusable buffers, which is faster, but means the data in the buffer is only valid until the next get operation (including cursor operations). Since this is a reusable buffer it also slightly differs from a typical buffer: the `length` property is set to the length of the value (what you typically want for normal usage), but the `byteLength` will be the size of the full allocated memory area for the buffer (usually much larger).
+
+### `prefetch(ids, callback?): Promise`
+With larger databases and situations where the data in the database may not be cached in memory, it may be advisable to use asynchronous methods to fetch data to avoid slow/expensive hard-page faults on the main thread. This method provides a means of asynchronously fetching data in separate thread/asynchronously to ensure data is in memory. This fetches the data for given ids and accesses all pages to ensure that any hard page faults are done asynchronously. Once completed, synchronous gets to the same entries will most likely be in memory and fast. The `prefetch` can also be run in parallel with sync `get`s (for the same entries) in situations where the main thread be busy with deserialization and other work at roughly the same rate as the prefetch page faults might occur.
+
+### `getMany(ids: K[], callback?): Promise`
+Asynchronously gets the values stored by the given ids and return the values in array corresponding to the array of ids. This uses `prefetch` followed by `get`s for each entry once the data is prefetched.
 
 ### `resetReadTxn(): void`
 Normally, this library will automatically start a reader transaction for get and range operations, periodically reseting the read transaction on new event turns and after any write transactions are committed, to ensure it is using an up-to-date snapshot of the database. However, you can call `resetReadTxn` if you need to manually force the read transaction to reset to the latest snapshot/version of the database. In particular, this may be useful running with multiple processes where you need to immediately reset the read transaction based on a known update in another process (rather than waiting for the next event turn).
@@ -320,7 +327,7 @@ let myDB = open('my-db', {
 	}
 })
 ```
-Compression is recommended for large databases that may be close to or larger than available RAM, to improve caching and reduce page faults. If you use enable compression for a database, you must ensure that the data is always opened with the same compression setting, so that the data will be properly decompressed.
+Compression is recommended for large databases that may be close to or larger than available RAM, to improve caching and reduce page faults. If you enable compression for a database, you must ensure that the data is always opened with the same compression setting, so that the data will be properly decompressed.
 
 ## Caching
 This library supports caching of entries from databases, and uses a [LRU/LFU (LRFU) and weak-referencing caching mechanism](https://github.com/kriszyp/weak-lru-cache) for highly optimized caching and object tracking. There are several key potential benefits to using caching, including performance, key correlation with object identity, and immediate/synchronous access to saved data. Enabling caching will cache `get`s and `put`s, which can make frequent `get`s much faster. Caching is enabled by providing a truthy value for the `cache` property on the database `options`.
@@ -352,7 +359,7 @@ Additional databases can be opened within the main database environment with:
 If the `path` has an `.` in it, it is treated as a file name, otherwise it is treated as a directory name, where the data will be stored. The `options` argument to either of the functions should be an object, and supports the following properties, all of which are optional (except `name` if not otherwise specified):
 * `name` - This is the name of the database. This defaults to null (which is the root database) when opening the database environment (`open`). When an opening a database within an environment (`openDB`), this is required, if not specified in first parameter.
 * `encoding` - Sets the encoding for the database values, which can be `'msgpack'`, `'json'`, `'cbor'`, `'string'`, `'ordered-binary'`or `'binary'`.
-* `encoder` - Directly set the encoder to use. This can be an object with `encode` and `decode` methods. It can also be an object with an `Encoder` that will be called to create the encoder instance. This allows you explicitly set the encoder with an import:
+* `encoder` - Directly set the encoder to use or provide the settings for an encoder. This can be an object with settings to pass to the encoder or can be an object with `encode` and `decode` methods. It can also be an object with an `Encoder` that will be called to create the encoder instance. This allows you explicitly set the encoder with an import:
 ```
 import * as cbor from 'cbor-x';
 let db = open({ encoder: cbor });
@@ -368,12 +375,12 @@ let db = open({ encoder: cbor });
 
 The following additional option properties are only available when creating the main database environment (`open`):
 * `path` - This is the file path to the database environment file you will use.
-* `pageSize` - This defines the page size of the database. This is 16,384 by default (previous versions defaulted to 4096). You may want to consider setting this to 32,768 for better performance on larger databases. Note that this does not affect the page size of an existing database.
 * `maxDbs` - The maximum number of databases to be able to open within one root database/environment ([there is some extra overhead if this is set very high](http://www.lmdb.tech/doc/group__mdb.html#gaa2fc2f1f37cb1115e733b62cab2fcdbc)). This defaults to 12.
 * `maxReaders` - The maximum number of concurrent read transactions (readers) to be able to open ([more information](http://www.lmdb.tech/doc/group__mdb.html#gae687966c24b790630be2a41573fe40e2)).
 * `overlappingSync` - This enables committing transactions where _libmdbx_ waits for a transaction to be fully flushed to disk _after_ the transaction has been committed. This option is discussed in more detail below.
 * `separateFlushed` - Resolve asynchronous operations when commits are finished and visible and include a separate promise for when a commit is flushed to disk, as a `flushed` property on the commit promise.
 * `eventTurnBatching` - This is enabled by default and will ensure that all asynchronous write operations performed in the same event turn will be batched together into the same transaction. Disabling this allows lmdbx-js to commit a transaction at any time, and asynchronous operations will only be guaranteed to be in the same transaction if explicitly batched together (with `transaction`, `batch`, `ifVersion`). If this is disabled (set to `false`), you can control how many writes can occur before starting a transaction with `txnStartThreshold` (allow a transaction will still be started at the next event turn if the threshold is not met). Disabling event turn batching (and using lower `txnStartThreshold` values) can facilitate a faster response time to write operations. `txnStartThreshold` defaults to 5.
+* `pageSize` - This defines the page size of the database. This is 4,096 by default. You may want to consider setting this to 8,192 for databases larger than available memory (and moreso if you have range queries) or 4,096 for databases that can mostly cache in memory. Note that this only effects the page size of new databases (does not affect existing databases).
 * `encryptionKey` - This enables encryption, and the provided value is the key that is used for encryption. This may be a buffer or string, but must be 32 bytes/characters long. This uses the Chacha8 cipher for fast and secure on-disk encryption of data.
 * `commitDelay` - This is the amount of time to wait (in milliseconds) for batching write operations before committing the writes (in a transaction). This defaults to 0. A delay of 0 means more immediate commits with less latency (uses `setImmediate`), but a longer delay (which uses `setTimeout`) can be more efficient at collecting more writes into a single transaction and reducing I/O load. Note that NodeJS timers only have an effective resolution of about 10ms, so a `commitDelay` of 1ms will generally wait about 10ms.
 
@@ -386,14 +393,13 @@ In addition, the following options map to _libmdbx_'s env flags, <a href="https:
 * `mapSize` - This can be used to specify the initial amount of how much virtual memory address space (in bytes) to allocate for mapping to the database files. Setting a map size will typically disable `remapChunks` by default unless the size is larger than appropriate for the OS. Different OSes have different allocation limits.
 * `useWritemap` - Use writemaps, this can improve performance by reducing malloc calls and file writes, but can increase risk of a stray pointer corrupting data, and may be slower on Windows. Combined with `noSync`, normal reads/writes/transactions involve virtually zero explicit I/O calls, only modifications to memory maps that the OS persists when convenient, which may be beneficial.
 * `noMetaSync` - This isn't as dangerous as `noSync`, but doesn't improve performance much either.
-* `pageSize` - This changes the page size of the database. This is 4096 by default, and the default generally has the best performance since it aligns with normal OS page size.
-* `noReadAhead` - This disables read-ahead caching. Turning it off may help random read performance when the DB is larger than RAM and system RAM is full. However, this is not supported by all OSes, including Windows.
+* `noReadAhead` - This disables read-ahead caching. Turning it off may help random read performance when the DB is larger than RAM and system RAM is full. However, this is not supported by all OSes, including Windows, and should not be used in conjunction with page sizes larger than 4,096.
 * `noSubdir` - Treat `path` as a filename instead of directory (this is the default if the path appears to end with an extension and has '.' in it)
 * `readOnly` - Self-descriptive.
 * `mapAsync` - Not recommended, commits are already performed in a separate thread (asyncronous to JS), and this prevents accurate notification of when flushes finish.
 
 #### Serialization options
-If you are using the default encoding of `'msgpack'`, the [msgpackr](https://github.com/kriszyp/msgpackr) package is used for serialization and deserialization. You can provide database options that are passed to msgpackr, as well. For example, these options can be potentially useful:
+If you are using the default encoding of `'msgpack'`, the [msgpackr](https://github.com/kriszyp/msgpackr) package is used for serialization and deserialization. You can provide encoder options that are passed to msgpackr or cbor, as well, by including them in the `encoder` property object. For example, these options can be potentially useful:
 * `structuredClone` -  This enables the structured cloning extensions that will encode object/cyclic references and additional built-in types/classes.
 * `useFloat32: 4` -  Encode floating point numbers in 32-bit format when possible.
 
@@ -410,15 +416,49 @@ The database instance is an <a href="https://nodejs.org/dist/latest-v11.x/docs/a
 
 `beforecommit` - This event is fired before a transaction finishes/commits. The callback function can perform additional (asynchronous) writes (`put` and `remove`) and they will be included in the transaction about to be performed as the last operation(s) before the transaction commits (this can be useful for updating a global version stamp based on all previous writes, for example). Using this event forces `eventTurnBatching` to be enabled. This can be called multiples times in a transaction, but should always be called as the last operation of a transaction.
 
+## Deno
+This package is supported on Deno as of v2.1, but there are some requirements and limitations. First, lmdb-js requires FFI (which is currently marked `unstable`) and several permissions to be enabled, so you need to start deno with at least these flags:
+```
+deno run --allow-ffi --unstable --allow-write --allow-read --allow-env --allow-net your-app.ts
+```
+Deno [currently doesn't provide any infrastructure for binary builds](https://github.com/denoland/deno/issues/12943), so lmdbx-js will attempt to download and save the appropriate binary file on its own. If you need to manually specify a path, you can do so with the `LMDBX_LIB_PATH` env variable.
+
+You can then use the library with an import of the lmdb-js module from deno.land (insert the version you want):
+```
+import { open } from 'https://deno.land/x/lmdbx@<version>/mod.ts';
+```
+
+Also, lmdb-js doesn't support asynchronous transaction callbacks (`transaction` API), which can't be efficiently implemented without a resolution to this [issue](https://github.com/denoland/deno/issues/12946). You can still use the standard asynchronous put and remove methods, which will properly be committed asynchronously, as well as the synchronous transactions.
+
+## LevelUp
+
+If you have an existing application built on LevelUp, the lmdb-js is designed to make it easy to transition to this package, with most of the LevelUp API implemented and supported in lmdb-js. This includes the `put`, `del`, `batch`, `status`, `isOperation`, and `getMany` functions. One key difference in APIs is that LevelUp uses asynchronous callback based `get`s, but lmdb-js is so fast that it generally returns from `get` call before an an event can even be queued, consequently lmdb-js uses synchronous `get`s. However, there is a `levelup` export that can be used to generate a new database instance with LevelUp's style of API for `get` (although it still runs synchronously):
+```
+let dbLevel = levelup(db)
+dbLevel.get(id, (error, value) => {
+
+})
+// or
+dbLevel.get(id).then(...)
+```
+
+## Benchmarks
+
+Benchmarking on Node 14.9, with 3.4Ghz i7-4770 Windows, a get operation, using JS numbers as a key, retrieving data from the database (random access), and decoding the data into a structured object with 10 properties (using default [MessagePack encoding](https://github.com/kriszyp/msgpackr)), can be done in about half a microsecond, or about 1,900,000/sec on a single thread. This is almost three times as fast as a single native `JSON.parse` call with the same object without any DB interaction! LMDB scales effortlessly across multiple processes or threads; over 6,000,000 operations/sec on the same 4/8 core computer by running across multiple threads (or 18,000,000 operations/sec with raw binary data). By running writes on a separate transactional thread, writing is extremely fast as well. With encoding the same objects, full encoding and writes can be performed at about 500,000 puts/second or 1,700,000 puts/second on multiple threads.
+
 ##### Build Options
 A few _libmdbx_ options are available at build time, and can be specified with options with `npm install` (which can be specified in your package.json install script):
-`npm install --use_robust=true`: This will enable _libmdbx_'s MDB_USE_ROBUST option, which uses robust semaphores/mutexes so that if you are using multiple processes, and one process dies in the middle of transaction, the OS will cleanup the semaphore/mutex, aborting the transaction and allowing other processes to run without hanging. There is a slight performance overhead, but this is recommended if you will be using multiple processes.
 
 On MacOS, there is a default limit of 10 robust locked semaphores, which imposes a limit on the number of open write transactions (if you have over 10 database environments with a write transaction). If you need more concurrent write transactions, you can increase your maximum undoable semaphore count by setting kern.sysv.semmnu on your local computer. Otherwise don't use the robust mutex option. You can also try to minimize overlapping transactions and/or reduce the number of database environments (and use more databases within each environment).
 
 `npm install --use_data_v1=true`: This will build from an older version of _libmdbx_ that uses the legacy data format version 1 (the latest _libmdbx_ uses data format version 2). For portability of the data format, this may be preferable since many libraries still use older versions of _libmdbx_. Since this is an older version of _libmdbx_, some features may not be available, including encryption and remapping.
 
 `npm install --enable_fast_api_calls=true`: This will build `lmdbx-js` with V8's new API for fast calls. `lmdbx-js` supports the new fast API for several functions, and this can provide significant performance benefits for `get`s and range retrieval. This should be used in conjunction with starting node with the `--turbo-fast-api-calls` option. This is only supported in Node v17 and higher.
+
+## Alternate Database
+The lmdb-js project is developed in conjunction with [lmdbx-js](https://github.com/kriszyp/lmdbx-js), which is based on [libmdbx](https://github.com/erthink/libmdbx), a fork of LMDB. Each of these have their own advantages:
+* lmdb-js/LMDB is great for general usage, easy to set up with automated sizing, supports encryption, and works well across all platforms.
+* lmdbx-js/libmdbx has more advanced management of free space and database sizing that can offer more performance optimizations for heavy usage. However, it may have not perform as well on Windows, and the database format is not compatible with LMDB.
 
 ## Credits
 

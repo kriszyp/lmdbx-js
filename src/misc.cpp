@@ -21,13 +21,24 @@ void setupExportMisc(Local<Object> exports) {
     Nan::SetMethod(exports, "setGlobalBuffer", setGlobalBuffer);
     Nan::SetMethod(exports, "lmdbxError", lmdbxError);
     //Nan::SetMethod(exports, "getBufferForAddress", getBufferForAddress);
-    Nan::SetMethod(exports, "getAddress", getAddress);
-    Nan::SetMethod(exports, "getAddressShared", getAddressShared);
+    Nan::SetMethod(exports, "getAddress", getViewAddress);
     // this is set solely for the purpose of giving a good name to the set of native functions for the profiler since V8
     // just uses the name of the last exported native function:
-    Nan::SetMethod(exports, "lmdbxNativeFunctions", getAddress);
+    Nan::SetMethod(exports, "lmdbxNativeFunctions", lmdbxNativeFunctions);
 }
-
+extern "C" EXTERN void freeData(double ref) {
+    delete (char*) (size_t) ref;
+}
+extern "C" EXTERN size_t getAddress(char* buffer) {
+    return (size_t) buffer;
+}
+extern "C" EXTERN void setGlobalBuffer(char* buffer, size_t bufferSize) {
+    globalUnsafePtr = buffer;
+    globalUnsafeSize = bufferSize;
+}
+extern "C" EXTERN void getError(int rc, char* target) {
+    strcpy(target, mdbx_strerror(rc));
+}
 
 void setFlagFromValue(int *flags, int flag, const char *name, bool defaultValue, Local<Object> options) {
     Local<Context> context = Nan::GetCurrentContext();
@@ -41,13 +52,13 @@ void setFlagFromValue(int *flags, int flag, const char *name, bool defaultValue,
     }
 }
 
-NodeLmdbxKeyType keyTypeFromOptions(const Local<Value> &val, NodeLmdbxKeyType defaultKeyType) {
+LmdbxKeyType keyTypeFromOptions(const Local<Value> &val, LmdbxKeyType defaultKeyType) {
     if (!val->IsObject()) {
         return defaultKeyType;
     }
     auto obj = Local<Object>::Cast(val);
 
-    NodeLmdbxKeyType keyType = defaultKeyType;
+    LmdbxKeyType keyType = defaultKeyType;
     int keyIsUint32 = 0;
     int keyIsBuffer = 0;
     int keyIsString = 0;
@@ -59,22 +70,22 @@ NodeLmdbxKeyType keyTypeFromOptions(const Local<Value> &val, NodeLmdbxKeyType de
     const char *keySpecificationErrorText = "You can't specify multiple key types at once. Either set keyIsUint32, or keyIsBuffer or keyIsString (default).";
     
     if (keyIsUint32) {
-        keyType = NodeLmdbxKeyType::Uint32Key;
+        keyType = LmdbxKeyType::Uint32Key;
         if (keyIsBuffer || keyIsString) {
             Nan::ThrowError(keySpecificationErrorText);
-            return NodeLmdbxKeyType::InvalidKey;
+            return LmdbxKeyType::InvalidKey;
         }
     }
     else if (keyIsBuffer) {
-        keyType = NodeLmdbxKeyType::BinaryKey;
+        keyType = LmdbxKeyType::BinaryKey;
         
         if (keyIsUint32 || keyIsString) {
             Nan::ThrowError(keySpecificationErrorText);
-            return NodeLmdbxKeyType::InvalidKey;
+            return LmdbxKeyType::InvalidKey;
         }
     }
     else if (keyIsString) {
-        keyType = NodeLmdbxKeyType::StringKey;
+        keyType = LmdbxKeyType::StringKey;
     }
     
     return keyType;
@@ -186,37 +197,14 @@ NAN_METHOD(setGlobalBuffer) {
     auto array_buffer = v8::ArrayBuffer::New(Isolate::GetCurrent(), std::move(backing));
     info.GetReturnValue().Set(array_buffer);
 }*/
-NAN_METHOD(getAddress) {
-    void* address;
-    Local<ArrayBuffer> buffer = Local<ArrayBuffer>::Cast(info[0]);
-    #if _MSC_VER && NODE_RUNTIME_ELECTRON && NODE_MODULE_VERSION >= 89
-    // this is a terrible thing we have to do because of https://github.com/electron/electron/issues/29893
-    v8::Local<v8::Object> bufferView;
-    bufferView = node::Buffer::New(Isolate::GetCurrent(), buffer, 0, buffer->ByteLength()).ToLocalChecked();
-    address = node::Buffer::Data(bufferView);
-    #elif V8_MAJOR_VERSION >= 8
-    address = buffer->GetBackingStore()->Data();
-    #else
-    address = buffer->GetContents().Data();
-    #endif
+NAN_METHOD(getViewAddress) {
+    int length = node::Buffer::Length(info[0]);
+    void* address = length > 0 ? node::Buffer::Data(info[0]) : nullptr;
     info.GetReturnValue().Set(Nan::New<Number>((size_t) address));
 }
-NAN_METHOD(getAddressShared) {
-    void* address;
-    #if _MSC_VER && NODE_RUNTIME_ELECTRON && NODE_MODULE_VERSION >= 89
-    // this is a terrible thing we have to do because of https://github.com/electron/electron/issues/29893
-    v8::Local<v8::Object> bufferView;
-    Local<ArrayBuffer> buffer = Local<ArrayBuffer>::Cast(info[0]);
-    bufferView = node::Buffer::New(Isolate::GetCurrent(), buffer, 0, buffer->ByteLength()).ToLocalChecked();
-    address = node::Buffer::Data(bufferView);
-    #elif V8_MAJOR_VERSION >= 8
-    address = Local<SharedArrayBuffer>::Cast(info[0])->GetBackingStore()->Data();
-    #else
-    address = Local<SharedArrayBuffer>::Cast(info[0])->GetContents().Data();
-    #endif
-    info.GetReturnValue().Set(Nan::New<Number>((size_t) address));
+NAN_METHOD(lmdbxNativeFunctions) {
+    // no-op, just doing this to give a label to the native functions
 }
-
 
 void throwLmdbxError(int rc) {
     auto err = Nan::Error(mdbx_strerror(rc));

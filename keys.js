@@ -1,6 +1,4 @@
-import { getAddress } from './native.js';
-import { writeKey, readKey, enableNullTermination } from 'ordered-binary/index.js';
-enableNullTermination();
+import { getAddress, orderedBinary } from './external.js';
 
 const writeUint32Key = (key, target, start) => {
 	(target.dataView || (target.dataView = new DataView(target.buffer, 0, target.length))).setUint32(start, key, true);
@@ -10,8 +8,6 @@ const readUint32Key = (target, start) => {
 	return (target.dataView || (target.dataView = new DataView(target.buffer, 0, target.length))).getUint32(start, true);
 };
 const writeBufferKey = (key, target, start) => {
-	if (key.length > 1978)
-		throw new Error('Key buffer is too long');
 	target.set(key, start);
 	return key.length + start;
 };
@@ -23,13 +19,13 @@ const readBufferKey = (target, start, end) => {
 export function applyKeyHandling(store) {
  	if (store.encoding == 'ordered-binary') {
 		store.encoder = store.decoder = {
-			writeKey,
-			readKey,
+			writeKey: orderedBinary.writeKey,
+			readKey: orderedBinary.readKey,
 		};
 	}
 	if (store.encoder && store.encoder.writeKey && !store.encoder.encode) {
 		store.encoder.encode = function(value) {
-			return saveKey(value, writeKey, false, store.maxKeySize);
+			return saveKey(value, this.writeKey, false, store.maxKeySize);
 		};
 	}
 	if (store.decoder && store.decoder.readKey && !store.decoder.decode)
@@ -44,32 +40,36 @@ export function applyKeyHandling(store) {
 		store.writeKey = store.keyEncoder.writeKey;
 		store.readKey = store.keyEncoder.readKey;
 	} else {
-		store.writeKey = writeKey;
-		store.readKey = readKey;
+		store.writeKey = orderedBinary.writeKey;
+		store.readKey = orderedBinary.readKey;
 	}
 }
 
-let saveBuffer, saveDataView, saveDataAddress;
+let saveBuffer, saveDataView = { setFloat64() {}, setUint32() {} }, saveDataAddress;
 let savePosition = 8000;
+let DYNAMIC_KEY_BUFFER_SIZE = 8192;
 function allocateSaveBuffer() {
-	saveBuffer = Buffer.alloc(8192);
+	saveBuffer = typeof Buffer != 'undefined' ? Buffer.alloc(DYNAMIC_KEY_BUFFER_SIZE) : new Uint8Array(DYNAMIC_KEY_BUFFER_SIZE);
+	saveBuffer.buffer.address = getAddress(saveBuffer);
+	saveDataAddress = saveBuffer.buffer.address;
+	// TODO: Conditionally only do this for key sequences?
+	saveDataView.setUint32(savePosition, 0xffffffff);
+	saveDataView.setFloat64(savePosition + 4, saveDataAddress, true); // save a pointer from the old buffer to the new address for the sake of the prefetch sequences
 	saveBuffer.dataView = saveDataView = new DataView(saveBuffer.buffer, saveBuffer.byteOffset, saveBuffer.byteLength);
-	saveBuffer.buffer.address = getAddress(saveBuffer.buffer);
-	saveDataAddress = saveBuffer.buffer.address + saveBuffer.byteOffset;
 	savePosition = 0;
-
 }
 export function saveKey(key, writeKey, saveTo, maxKeySize) {
-	if (savePosition > 7500) {
+	if (savePosition > 7800) {
 		allocateSaveBuffer();
 	}
 	let start = savePosition;
 	try {
-		savePosition = writeKey(key, saveBuffer, start + 4);
+		savePosition = key === undefined ? start + 4 :
+			writeKey(key, saveBuffer, start + 4);
 	} catch (error) {
 		saveBuffer.fill(0, start + 4); // restore zeros
 		if (error.name == 'RangeError') {
-			if (8188 - start < maxKeySize) {
+			if (8180 - start < maxKeySize) {
 				allocateSaveBuffer(); // try again:
 				return saveKey(key, writeKey, saveTo, maxKeySize);
 			}
@@ -81,15 +81,20 @@ export function saveKey(key, writeKey, saveTo, maxKeySize) {
 	if (length > maxKeySize) {
 		throw new Error('Key of size ' + length + ' was too large, max key size is ' + maxKeySize);
 	}
+	if (savePosition >= 8180) { // need to reserve enough room at the end for pointers
+		savePosition = start // reset position
+		allocateSaveBuffer(); // try again:
+		return saveKey(key, writeKey, saveTo, maxKeySize);
+	}
 	if (saveTo) {
 		saveDataView.setUint32(start, length, true); // save the length
 		saveTo.saveBuffer = saveBuffer;
-		savePosition = (savePosition + 7) & 0xfffff8;
+		savePosition = (savePosition + 12) & 0xfffffc;
 		return start + saveDataAddress;
 	} else {
-		saveBuffer.start = start + 4
-		saveBuffer.end = savePosition
-		savePosition = (savePosition + 7) & 0xfffff8;
-		return saveBuffer
+		saveBuffer.start = start + 4;
+		saveBuffer.end = savePosition;
+		savePosition = (savePosition + 7) & 0xfffff8; // full 64-bit word alignment since these are usually copied
+		return saveBuffer;
 	}
 }

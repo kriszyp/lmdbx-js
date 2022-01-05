@@ -87,7 +87,7 @@ NAN_METHOD(TxnWrap::ctor) {
             }
         }
         //fprintf(stderr, "txn_begin from txn.cpp %u %p\n", flags, parentTxn);
-        int rc = mdbx_txn_begin(ew->env, parentTxn, flags, &txn);
+        int rc = mdbx_txn_begin(ew->env, parentTxn, (MDBX_txn_flags_t) flags, &txn);
         if (rc != 0) {
             if (rc == EINVAL) {
                 return Nan::ThrowError("Invalid parameter, which on MacOS is often due to more transactions than available robust locked semaphors (see docs for more info)");
@@ -112,6 +112,86 @@ NAN_METHOD(TxnWrap::ctor) {
     tw->Wrap(info.This());
 
     return info.GetReturnValue().Set(info.This());
+}
+
+int TxnWrap::begin(EnvWrap *ew, unsigned int flags) {
+    this->ew = ew;
+    this->flags = flags;
+    MDBX_env *env = ew->env;
+    unsigned int envFlags;
+    mdbx_env_get_flags(env, &envFlags);
+    if (flags & MDBX_RDONLY) {
+        mdbx_txn_begin(env, nullptr, (MDBX_txn_flags_t) flags & 0xf0000, &this->txn);
+    } else {
+        //fprintf(stderr, "begin sync txn %i\n", flags);
+
+        if (ew->writeTxn)
+            txn = ew->writeTxn->txn;
+        else if (ew->writeWorker) {
+            // try to acquire the txn from the current batch
+            txn = ew->writeWorker->AcquireTxn((int*) &flags);
+            //fprintf(stderr, "acquired %p %p %p\n", ew->writeWorker, txn, flags);
+        } else {
+            pthread_mutex_lock(ew->writingLock);
+            txn = nullptr;
+        }
+
+        if (txn) {
+            if (flags & TXN_ABORTABLE) {
+                if (envFlags & MDBX_WRITEMAP)
+                    flags &= ~TXN_ABORTABLE;
+                else {
+                    // child txn
+                    mdbx_txn_begin(env, this->txn, (MDBX_txn_flags_t) flags & 0xf0000, &this->txn);
+                    TxnTracked* childTxn = new TxnTracked(txn, flags);
+                    childTxn->parent = ew->writeTxn;
+                    ew->writeTxn = childTxn;
+                    return 0;
+                }
+            }
+        } else {
+            mdbx_txn_begin(env, nullptr, (MDBX_txn_flags_t) flags & 0xf0000, &this->txn);
+            flags |= TXN_ABORTABLE;
+        }
+        ew->writeTxn = new TxnTracked(txn, flags);
+        return 0;
+    }
+    // Set the current write transaction
+    if (0 == (flags & MDBX_RDONLY)) {
+        ew->currentWriteTxn = this;
+    }
+    else {
+        ew->readTxns.push_back(this);
+        ew->currentReadTxn = txn;
+    }
+    this->parentTw = parentTw;
+    return 0;
+}
+extern "C" EXTERN void resetTxn(double twPointer, int flags) {
+    TxnWrap* tw = (TxnWrap*) (size_t) twPointer;
+    mdbx_txn_reset(tw->txn);
+}
+extern "C" EXTERN int renewTxn(double twPointer, int flags) {
+    TxnWrap* tw = (TxnWrap*) (size_t) twPointer;
+    return mdbx_txn_renew(tw->txn);
+}
+/*extern "C" EXTERN int commitTxn(double twPointer) {
+    TxnWrap* tw = (TxnWrap*) (size_t) twPointer;
+    int rc;
+    WriteWorker* writeWorker = tw->ew->writeWorker;
+    if (writeWorker) {
+        rc = mdbx_txn_commit(tw->txn);
+        pthread_mutex_unlock(tw->ew->writingLock);
+    }
+    else
+        rc = mdbx_txn_commit(tw->txn);
+    tw->removeFromEnvWrap();
+    return rc;
+}*/
+extern "C" EXTERN void abortTxn(double twPointer) {
+    TxnWrap* tw = (TxnWrap*) (size_t) twPointer;
+    mdbx_txn_abort(tw->txn);
+    tw->removeFromEnvWrap();
 }
 
 NAN_METHOD(TxnWrap::commit) {
