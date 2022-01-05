@@ -32,173 +32,51 @@ DbiWrap::~DbiWrap() {
 }
 
 NAN_METHOD(DbiWrap::ctor) {
-    Nan::HandleScope scope;
-
-    MDBX_dbi dbi;
-    MDBX_txn *txn;
-    int rc;
-    MDBX_db_flags_t flags = MDBX_DB_DEFAULTS;
-    MDBX_txn_flags_t txnFlags = MDBX_TXN_READWRITE;
-    Local<String> name;
-    bool nameIsNull = false;
-    LmdbxKeyType keyType = LmdbxKeyType::DefaultKey;
-    bool needsTransaction = true;
-    bool isOpen = false;
-    bool hasVersions = false;
-
     EnvWrap *ew = Nan::ObjectWrap::Unwrap<EnvWrap>(Local<Object>::Cast(info[0]));
-    Compression* compression = nullptr;
-
-    /*
-    // TODO: Consolidate to this
     DbiWrap* dw = new DbiWrap(ew->env, 0);
     dw->ew = ew;
-    int flags = info[0]->IntegerValue(Nan::GetCurrentContext()).FromJust();
-    char* name = node::Buffer::Data(info[1]);
-    LmdbKeyType keyType = (LmdbKeyType) info[2]->IntegerValue(Nan::GetCurrentContext()).FromJust();
-    Compression* compression = (Compression*) (size_t) Local<Number>::Cast(info[3])->Value();
-    int rc = dw->open(flags & ~HAS_VERSIONS, name, flags & HAS_VERSIONS,
+    int flags = info[1]->IntegerValue(Nan::GetCurrentContext()).FromJust();
+    char* nameBytes;
+    if (info[2]->IsString()) {
+        Local<String> name = Local<String>::Cast(info[2]);
+        nameBytes = new char[name->Length() * 3 + 1];
+        name->WriteUtf8(Isolate::GetCurrent(), nameBytes, -1);
+    } else
+        nameBytes = nullptr;
+    LmdbxKeyType keyType = (LmdbxKeyType) info[3]->IntegerValue(Nan::GetCurrentContext()).FromJust();
+    Compression* compression;
+    if (info[4]->IsObject())
+        compression = Nan::ObjectWrap::Unwrap<Compression>(Nan::To<v8::Object>(info[4]).ToLocalChecked());
+    else
+        compression = nullptr;
+    int rc = dw->open(flags & ~HAS_VERSIONS, nameBytes, flags & HAS_VERSIONS,
         keyType, compression);
+    if (nameBytes)
+        delete nameBytes;
     if (rc) {
-        delete dw;
-        return rc;
-    }
-    return info.GetReturnValue().Set(info.This());
-*/
-
-    if (info[1]->IsObject()) {
-        Local<Object> options = Local<Object>::Cast(info[1]);
-        nameIsNull = options->Get(Nan::GetCurrentContext(), Nan::New<String>("name").ToLocalChecked()).ToLocalChecked()->IsNull();
-        name = Local<String>::Cast(options->Get(Nan::GetCurrentContext(), Nan::New<String>("name").ToLocalChecked()).ToLocalChecked());
-
-        // Get flags from options
-
-        // NOTE: mdbx_set_relfunc is not exposed because MDBX_FIXEDMAP is "highly experimental"
-        // NOTE: mdbx_set_relctx is not exposed because MDBX_FIXEDMAP is "highly experimental"
-        setFlagFromValue((int*) &flags, (int)MDBX_REVERSEKEY, "reverseKey", false, options);
-        setFlagFromValue((int*) &flags, (int)MDBX_DUPSORT, "dupSort", false, options);
-        setFlagFromValue((int*) &flags, (int)MDBX_DUPFIXED, "dupFixed", false, options);
-        setFlagFromValue((int*) &flags, (int)MDBX_INTEGERDUP, "integerDup", false, options);
-        setFlagFromValue((int*) &flags, (int)MDBX_REVERSEDUP, "reverseDup", false, options);
-        setFlagFromValue((int*) &flags, (int)MDBX_CREATE, "create", false, options);
-
-        // TODO: wrap mdbx_set_compare
-        // TODO: wrap mdbx_set_dupsort
-
-        keyType = keyTypeFromOptions(options);
-        if (keyType == LmdbxKeyType::InvalidKey) {
-            // NOTE: Error has already been thrown inside keyTypeFromOptions
-            return;
-        }
-        
-        if (keyType == LmdbxKeyType::Uint32Key) {
-            flags = MDBX_INTEGERKEY;
-        }
-        Local<Value> compressionOption = options->Get(Nan::GetCurrentContext(), Nan::New<String>("compression").ToLocalChecked()).ToLocalChecked();
-        if (compressionOption->IsObject()) {
-            compression = Nan::ObjectWrap::Unwrap<Compression>(Nan::To<v8::Object>(compressionOption).ToLocalChecked());
-        }
-
-        // Set flags for txn used to open database
-        Local<Value> create = options->Get(Nan::GetCurrentContext(), Nan::New<String>("create").ToLocalChecked()).ToLocalChecked();
-        #if NODE_VERSION_AT_LEAST(12,0,0)
-        if (create->IsBoolean() ? !create->BooleanValue(Isolate::GetCurrent()) : true) {
-        #else
-        if (create->IsBoolean() ? !create->BooleanValue(Nan::GetCurrentContext()).FromJust() : true) {
-        #endif
-            txnFlags = MDBX_TXN_RDONLY;
-        }
-        Local<Value> hasVersionsLocal = options->Get(Nan::GetCurrentContext(), Nan::New<String>("useVersions").ToLocalChecked()).ToLocalChecked();
-        hasVersions = hasVersionsLocal->IsTrue();
-
-        if (ew->writeTxn) {
-            needsTransaction = false;
-            txn = ew->writeTxn->txn;
-        }
-    }
-    else {
-        return Nan::ThrowError("Invalid parameters.");
-    }
-    if (info[2]->IsNumber()) {
-        keyType = (LmdbKeyType) info[2]->IntegerValue(Nan::GetCurrentContext()).FromJust();
-    }
-    if (needsTransaction) {
-        // Open transaction
-        rc = mdbx_txn_begin(ew->env, nullptr, txnFlags, &txn);
-        if (rc != 0) {
-            // No need to call mdbx_txn_abort, because mdbx_txn_begin already cleans up after itself
+        if (rc == MDBX_NOTFOUND)
+            dw->dbi = (MDBX_dbi) 0xffffffff;
+        else {
+            delete dw;
             return throwLmdbxError(rc);
         }
     }
-
-    // Open database
-    // NOTE: nullptr in place of the name means using the unnamed database.
-    #if NODE_VERSION_AT_LEAST(12,0,0)
-    rc = mdbx_dbi_open(txn, nameIsNull ? nullptr : *String::Utf8Value(Isolate::GetCurrent(), name), flags, &dbi);
-    #else
-    rc = mdbx_dbi_open(txn, nameIsNull ? nullptr : *String::Utf8Value(name), flags, &dbi);
-    #endif
-    if (rc != 0) {
-        if (needsTransaction) {
-            mdbx_txn_abort(txn);
-        }
-        return throwLmdbxError(rc);
-    }
-    else {
-        isOpen = true;
-    }
-    // Create wrapper
-    DbiWrap* dw = new DbiWrap(ew->env, dbi);
-    if (isOpen) {
-        dw->ew = ew;
-    }
-    if (needsTransaction) {
-        // Commit transaction
-        rc = mdbx_txn_commit(txn);
-        if (rc != 0) {
-            return throwLmdbxError(rc);
-        }
-    }
-
-    dw->keyType = keyType;
-    dw->flags = flags;
-    dw->isOpen = isOpen;
-    dw->compression = compression;
-    dw->hasVersions = hasVersions;
     dw->Wrap(info.This());
-    info.This()->Set(Nan::GetCurrentContext(), Nan::New<String>("dbi").ToLocalChecked(), Nan::New<Number>(dbi));
-
+    info.This()->Set(Nan::GetCurrentContext(), Nan::New<String>("dbi").ToLocalChecked(), Nan::New<Number>(dw->dbi));
     return info.GetReturnValue().Set(info.This());
 }
 
-int DbiWrap::open(int flags, char* name, bool hasVersions, LmdbKeyType keyType, Compression* compression) {
+int DbiWrap::open(int flags, char* name, bool hasVersions, LmdbxKeyType keyType, Compression* compression) {
     MDBX_txn* txn = ew->getReadTxn();
     this->hasVersions = hasVersions;
     this->compression = compression;
     this->keyType = keyType;
+    this->flags = flags;
     flags &= ~HAS_VERSIONS;
-    if (keyType == LmdbKeyType::Uint32Key)
-        flags |= MDBX_INTEGERKEY;
-    int rc = mdbx_dbi_open(txn, name, flags, &this->dbi);
-    if (rc == EACCES) {
-        if (!ew->writeTxn) {
-            rc = mdbx_txn_begin(ew->env, nullptr, 0, &txn);
-            if (!rc) {
-                rc = mdbx_dbi_open(txn, name, flags, &this->dbi);
-                if (rc)
-                    mdbx_txn_abort(txn);
-                else
-                    mdbx_txn_commit(txn);
-            }
-        }
-    }
+    int rc = mdbx_dbi_open(txn, name, (MDBX_db_flags_t) flags, &this->dbi);
     if (rc)
         return rc;
     this->isOpen = true;
-    if (keyType == LmdbKeyType::DefaultKey && name) { // use the fast compare, but can't do it if we have db table/names mixed in
-        mdbx_set_compare(txn, dbi, compareFast);
-    }
-
     return 0;
 }
 extern "C" EXTERN uint32_t getDbi(double dw) {
@@ -259,15 +137,8 @@ NAN_METHOD(DbiWrap::stat) {
     Nan::HandleScope scope;
 
     DbiWrap *dw = Nan::ObjectWrap::Unwrap<DbiWrap>(info.This());
-
-    if (info.Length() != 1) {
-        return Nan::ThrowError("dbi.stat should be called with a single argument which is a txn.");
-    }
-
-    TxnWrap *txn = Nan::ObjectWrap::Unwrap<TxnWrap>(Local<Object>::Cast(info[0]));
-
     MDBX_stat stat;
-    mdbx_dbi_stat(txn->txn, dw->dbi, &stat, sizeof(MDBX_stat));
+    mdbx_dbi_stat(dw->ew->getReadTxn(), dw->dbi, &stat, sizeof MDBX_stat);
 
     Local<Context> context = Nan::GetCurrentContext();
     Local<Object> obj = Nan::New<Object>();
@@ -393,7 +264,7 @@ extern "C" EXTERN int prefetch(double dwPointer, double keysPointer) {
 
 int DbiWrap::prefetch(uint32_t* keys) {
     MDBX_txn* txn;
-    mdbx_txn_begin(ew->env, nullptr, MDBX_RDONLY, &txn);
+    mdbx_txn_begin(ew->env, nullptr, MDBX_TXN_RDONLY, &txn);
     MDBX_val key;
     MDBX_val data;
     unsigned int flags;
@@ -404,24 +275,24 @@ int DbiWrap::prefetch(uint32_t* keys) {
     int rc = mdbx_cursor_open(txn, dbi, &cursor);
     if (rc)
         return rc;
-    while((key.mv_size = *keys++) > 0) {
-        if (key.mv_size == 0xffffffff) {
+    while((key.iov_len = *keys++) > 0) {
+        if (key.iov_len == 0xffffffff) {
             // it is a pointer to a new buffer
             keys = (uint32_t*) (size_t) *((double*) keys); // read as a double pointer
-            key.mv_size = *keys++;
-            if (key.mv_size == 0)
+            key.iov_len = *keys++;
+            if (key.iov_len == 0)
                 break;
         }
-        key.mv_data = (void*) keys;
-        keys += (key.mv_size + 12) >> 2;
+        key.iov_base = (void*) keys;
+        keys += (key.iov_len + 12) >> 2;
         int rc = mdbx_cursor_get(cursor, &key, &data, MDBX_SET_KEY);
         while (!rc) {
             // access one byte from each of the pages to ensure they are in the OS cache,
             // potentially triggering the hard page fault in this thread
-            int pages = (data.mv_size + 0xfff) >> 12;
+            int pages = (data.iov_len + 0xfff) >> 12;
             // TODO: Adjust this for the page headers, I believe that makes the first page slightly less 4KB.
             for (int i = 0; i < pages; i++) {
-                effected += *(((uint8_t*)data.mv_data) + (i << 12));
+                effected += *(((uint8_t*)data.iov_base) + (i << 12));
             }
             if (dupSort) // in dupsort databases, access the rest of the values
                 rc = mdbx_cursor_get(cursor, &key, &data, MDBX_NEXT_DUP);

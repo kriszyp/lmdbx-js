@@ -40,8 +40,6 @@ void TxnWrap::removeFromEnvWrap() {
                 ew->readTxns.erase(it);
             }
         }
-        
-        this->ew->Unref();
         this->ew = nullptr;
     }
     this->txn = nullptr;
@@ -108,7 +106,6 @@ NAN_METHOD(TxnWrap::ctor) {
     tw->parentTw = parentTw;
     tw->flags = flags;
     tw->ew = ew;
-    tw->ew->Ref();
     tw->Wrap(info.This());
 
     return info.GetReturnValue().Set(info.This());
@@ -121,7 +118,7 @@ int TxnWrap::begin(EnvWrap *ew, unsigned int flags) {
     unsigned int envFlags;
     mdbx_env_get_flags(env, &envFlags);
     if (flags & MDBX_RDONLY) {
-        mdbx_txn_begin(env, nullptr, (MDBX_txn_flags_t) flags & 0xf0000, &this->txn);
+        mdbx_txn_begin(env, nullptr, (MDBX_txn_flags_t) (flags & 0xf0000), &this->txn);
     } else {
         //fprintf(stderr, "begin sync txn %i\n", flags);
 
@@ -142,7 +139,7 @@ int TxnWrap::begin(EnvWrap *ew, unsigned int flags) {
                     flags &= ~TXN_ABORTABLE;
                 else {
                     // child txn
-                    mdbx_txn_begin(env, this->txn, (MDBX_txn_flags_t) flags & 0xf0000, &this->txn);
+                    mdbx_txn_begin(env, this->txn, (MDBX_txn_flags_t) (flags & 0xf0000), &this->txn);
                     TxnTracked* childTxn = new TxnTracked(txn, flags);
                     childTxn->parent = ew->writeTxn;
                     ew->writeTxn = childTxn;
@@ -150,7 +147,7 @@ int TxnWrap::begin(EnvWrap *ew, unsigned int flags) {
                 }
             }
         } else {
-            mdbx_txn_begin(env, nullptr, (MDBX_txn_flags_t) flags & 0xf0000, &this->txn);
+            mdbx_txn_begin(env, nullptr, (MDBX_txn_flags_t) (flags & 0xf0000), &this->txn);
             flags |= TXN_ABORTABLE;
         }
         ew->writeTxn = new TxnTracked(txn, flags);
@@ -163,31 +160,25 @@ int TxnWrap::begin(EnvWrap *ew, unsigned int flags) {
     else {
         ew->readTxns.push_back(this);
         ew->currentReadTxn = txn;
+        ew->readTxnRenewed = true;
     }
     this->parentTw = parentTw;
     return 0;
 }
 extern "C" EXTERN void resetTxn(double twPointer, int flags) {
     TxnWrap* tw = (TxnWrap*) (size_t) twPointer;
-    mdbx_txn_reset(tw->txn);
+    tw->reset();
 }
 extern "C" EXTERN int renewTxn(double twPointer, int flags) {
     TxnWrap* tw = (TxnWrap*) (size_t) twPointer;
     return mdbx_txn_renew(tw->txn);
 }
-/*extern "C" EXTERN int commitTxn(double twPointer) {
+extern "C" EXTERN int commitTxn(double twPointer) {
     TxnWrap* tw = (TxnWrap*) (size_t) twPointer;
-    int rc;
-    WriteWorker* writeWorker = tw->ew->writeWorker;
-    if (writeWorker) {
-        rc = mdbx_txn_commit(tw->txn);
-        pthread_mutex_unlock(tw->ew->writingLock);
-    }
-    else
-        rc = mdbx_txn_commit(tw->txn);
+    int rc = mdbx_txn_commit(tw->txn);
     tw->removeFromEnvWrap();
     return rc;
-}*/
+}
 extern "C" EXTERN void abortTxn(double twPointer) {
     TxnWrap* tw = (TxnWrap*) (size_t) twPointer;
     mdbx_txn_abort(tw->txn);
@@ -243,8 +234,11 @@ NAN_METHOD(TxnWrap::reset) {
     if (!tw->txn) {
         return Nan::ThrowError("The transaction is already closed.");
     }
-    tw->ew->readTxnRenewed = false;
-    mdbx_txn_reset(tw->txn);
+    tw->reset();
+}
+void TxnWrap::reset() {
+    ew->readTxnRenewed = false;
+    mdbx_txn_reset(txn);
 }
 
 NAN_METHOD(TxnWrap::renew) {

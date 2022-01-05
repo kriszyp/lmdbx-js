@@ -104,6 +104,11 @@ export function addReadMethods(LMDBStore, {
 		resetReadTxn() {
 			resetReadTxn();
 		},
+		_commitReadTxn() {
+			readTxn.commit();
+			readTxnRenewed = null;
+			readTxn = null;
+		},
 		ensureReadTxn() {
 			if (!env.writeTxn && !readTxnRenewed)
 				renewReadTxn();
@@ -195,12 +200,7 @@ export function addReadMethods(LMDBStore, {
 						cursor = !writeTxn && db.availableCursor;
 						if (cursor) {
 							db.availableCursor = null;
-							if (db.cursorTxn != txn) {
-								let rc = cursor.renew();
-								if (rc)
-									lmdbError(rc);
-							} else// if (db.currentRenewId != renewId)
-								flags |= 0x2000;
+							flags |= 0x2000;
 						} else {
 							cursor = new Cursor(db);
 						}
@@ -292,8 +292,14 @@ export function addReadMethods(LMDBStore, {
 							finishCursor();
 							return ITERATOR_DONE;
 						}
-						if (!valuesForKey || snapshot === false)
+						if (!valuesForKey || snapshot === false) {
+							if (keySize > 20000) {
+								if (keySize > 0x1000000)
+									lmdbError(keySize - 0x100000000)
+								throw new Error('Invalid key size ' + keySize.toString(16))
+							}
 							currentKey = store.readKey(keyBytes, 32, keySize + 32);
+						}
 						if (includeValues) {
 							let value;
 							lastSize = keyBytesView.getUint32(0, true);
@@ -455,27 +461,40 @@ export function addReadMethods(LMDBStore, {
 			}
 		},
 		getStats() {
-			return this.db.stat(readTxnRenewed ? readTxn : renewReadTxn());
+			readTxnRenewed ? readTxn : renewReadTxn();
+			return this.db.stat();
 		}
 	});
 	let get = LMDBStore.prototype.get;
 	function renewReadTxn() {
-		if (readTxn)
-			readTxn.renew();
-		else
-			readTxn = env.beginTxn(0x20000);
+		if (!readTxn) {
+			let retries = 0;
+			let waitArray;
+			do {
+				try {
+					readTxn = env.beginTxn(0x20000);
+					break;
+				} catch (error) {
+					if (error.message.includes('temporarily')) {
+						if (!waitArray)
+							waitArray = new Int32Array(new SharedArrayBuffer(4), 0, 1);
+						Atomics.wait(waitArray, 0, 0, retries * 2);
+					} else
+						throw error;
+				}
+			} while (retries++ < 100);
+		}
 		readTxnRenewed = setTimeout(resetReadTxn, 0);
 		return readTxn;
 	}
-	function resetReadTxn() {
+	function resetReadTxn(hardReset) {
 		renewId++;
 		if (readTxnRenewed) {
 			readTxnRenewed = null;
 			if (readTxn.cursorCount - (readTxn.renewingCursorCount || 0) > 0) {
 				readTxn.onlyCursor = true;
 				readTxn = null;
-			}
-			else
+			} else
 				readTxn.reset();
 		}
 	}

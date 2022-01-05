@@ -204,7 +204,7 @@ class WriteWorker {
     bool finishedProgress;
     bool hasError;
     EnvWrap* envForTxn;
-    ~WriteWorker();
+    virtual ~WriteWorker();
     uint32_t* instructions;
     int progressStatus;
     MDBX_env* env;
@@ -483,7 +483,7 @@ public:
         (Wrapper for `mdbx_txn_reset`)
     */
     static NAN_METHOD(reset);
-
+    void reset();
     /*
         Renews a read-only transaction after it has been reset.
         (Wrapper for `mdbx_txn_renew`)

@@ -152,8 +152,8 @@ MDBX_txn* EnvWrap::getReadTxn() {
     if (txn)
         mdbx_txn_renew(txn);
     else {
-        mdbx_txn_begin(env, nullptr, MDBX_TXN_RDONLY, &txn);
-        currentReadTxn = txn;
+        Nan::ThrowError("No current read transaction available");
+        return nullptr;
     }
     readTxnRenewed = true;
     return txn;
@@ -187,8 +187,9 @@ NAN_METHOD(EnvWrap::open) {
     }
     char* keyBuffer;
     Local<Value> keyBytesValue = options->Get(Nan::GetCurrentContext(), Nan::New<String>("keyBytes").ToLocalChecked()).ToLocalChecked();
-    if (keyBytesValue->IsArrayBufferView())
-        keyBuffer = node::Buffer::Data(keyBytesValue);
+    if (!keyBytesValue->IsArrayBufferView())
+        fprintf(stderr, "Invalid key buffer\n");
+    keyBuffer = node::Buffer::Data(keyBytesValue);
     Local<String> path = Local<String>::Cast(options->Get(Nan::GetCurrentContext(), Nan::New<String>("path").ToLocalChecked()).ToLocalChecked());
     int pathLength = path->Length();
     uint8_t* pathBytes = new uint8_t[pathLength + 1];
@@ -683,8 +684,8 @@ extern "C" EXTERN void abortEnvTxn(double ewPointer) {
 NAN_METHOD(EnvWrap::openDbi) {
     Nan::HandleScope scope;
 
-    const unsigned argc = 2;
-    Local<Value> argv[argc] = { info.This(), info[0] };
+    const unsigned argc = 5;
+    Local<Value> argv[argc] = { info.This(), info[0], info[1], info[2], info[3] };
     Nan::MaybeLocal<Object> maybeInstance = Nan::NewInstance(Nan::New(*dbiCtor), argc, argv);
 
     // Check if database could be opened
@@ -695,7 +696,11 @@ NAN_METHOD(EnvWrap::openDbi) {
     }
 
     Local<Object> instance = maybeInstance.ToLocalChecked();
-    info.GetReturnValue().Set(instance);
+    DbiWrap *dw = Nan::ObjectWrap::Unwrap<DbiWrap>(instance);
+    if (dw->dbi == (MDBX_dbi) 0xffffffff)
+        info.GetReturnValue().Set(Nan::Undefined());
+    else
+        info.GetReturnValue().Set(instance);
 }
 
 NAN_METHOD(EnvWrap::sync) {
@@ -846,7 +851,7 @@ extern "C" EXTERN int64_t openDbi(double ewPointer, int flags, char* name, int k
     int rc = dw->open(flags & ~HAS_VERSIONS, name, flags & HAS_VERSIONS,
         (LmdbxKeyType) keyType, (Compression*) (size_t) compression);
     if (rc) {
-        // delete dw;
+        delete dw;
         return rc;
     }
     return (int64_t) dw;

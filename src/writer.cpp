@@ -62,7 +62,7 @@ WriteWorker::WriteWorker(MDBX_env* env, EnvWrap* envForTxn, uint32_t* instructio
 	}
 
 NanWriteWorker::NanWriteWorker(MDBX_env* env, EnvWrap* envForTxn, uint32_t* instructions, Nan::Callback *callback)
-		: Nan::AsyncProgressWorker(callback, "lmdbx:write"), WriteWorker(env, envForTxn, instructions) {
+		: WriteWorker(env, envForTxn, instructions), Nan::AsyncProgressWorker(callback, "lmdbx:write") {
 	//fprintf(stdout, "nextCompressibleArg %p\n", nextCompressibleArg);
 		interruptionStatus = 0;
 		txn = nullptr;

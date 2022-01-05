@@ -40,6 +40,7 @@ let lmdbxLib = Deno.dlopen(libPath, {
     resetTxn: { parameters: ['f64'], result: 'void'},
     renewTxn: { parameters: ['f64'], result: 'i32'},
     abortTxn: { parameters: ['f64'], result: 'void'},
+    commitTxn: { parameters: ['f64'], result: 'i32'},
     commitEnvTxn: { parameters: ['f64'], result: 'i32'},
     abortEnvTxn: { parameters: ['f64'], result: 'void'},
     getError: { parameters: ['i32', 'pointer'], result: 'void'},
@@ -61,10 +62,9 @@ let lmdbxLib = Deno.dlopen(libPath, {
 //instrument(lmdbxLib.symbols);
 
 let { envOpen, closeEnv, getAddress, freeData, getMaxKeySize, openDbi, getDbi, readerCheck,
-    commitEnvTxn, abortEnvTxn, beginTxn, resetTxn, renewTxn, abortTxn, dbiGetByBinary, startWriting, compress, envWrite, openCursor, cursorRenew, cursorClose, cursorIterate, cursorPosition, cursorCurrentValue, setGlobalBuffer: setGlobalBuffer2, setCompressionBuffer, getError, newCompression, prefetch } = lmdbxLib.symbols;
+    commitEnvTxn, abortEnvTxn, beginTxn, resetTxn, renewTxn, abortTxn, commitTxn, dbiGetByBinary, startWriting, compress, envWrite, openCursor, cursorRenew, cursorClose, cursorIterate, cursorPosition, cursorCurrentValue, setGlobalBuffer: setGlobalBuffer2, setCompressionBuffer, getError, newCompression, prefetch } = lmdbxLib.symbols;
 let registry = new FinalizationRegistry(address => {
     // when an object is GC'ed, free it in C.
-    console.log('freeData',address)
     freeData(address);
 });
 
@@ -108,19 +108,10 @@ class Env extends CBridge {
         registry.register(this, this.address);
         return 0;
     }
-    openDbi(options: any) {
-        let flags = (options.reverseKey ? 0x02 : 0) |
-            (options.dupSort ? 0x04 : 0) |
-            (options.dupFixed ? 0x08 : 0) |
-            (options.integerDup ? 0x20 : 0) |
-            (options.reverseDup ? 0x40 : 0) |
-            (options.create ? 0x40000 : 0) |
-            (options.useVersions ? 0x1000 : 0);
-        let keyType = (options.keyIsUint32 || options.keyEncoding == 'uint32') ? 2 :
-            (options.keyIsBuffer || options.keyEncoding == 'binary') ? 3 : 0;
-        let rc: number = openDbi(this.address, flags, toCString(options.name), keyType, options.compression?.address || 0) as number;
+    openDbi(flags: number, name: string, keyType: number, compression: Compression) {
+        let rc: number = openDbi(this.address, flags, toCString(name), keyType, compression?.address || 0) as number;
         if (rc == -30798) { // MDB_NOTFOUND
-            console.log('dbi not found, need to try again with write txn');
+            return;
         }
         return new Dbi(checkError(rc),
             getDbi(rc) as number);
@@ -184,6 +175,9 @@ class Transaction extends CBridge {
     }
     abort() {
         abortTxn(this.address);
+    }
+    commit() {
+        commitTxn(this.address);
     }
 }
 

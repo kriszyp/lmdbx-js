@@ -142,7 +142,7 @@ uint32_t CursorWrap::doPosition(uint32_t offset, uint32_t keySize, uint64_t endK
     MDBX_val key, data;
     int rc;
     if (flags & 0x2000) // TODO: check the txn_id to determine if we need to renew
-        mdbx_cursor_renew(mdbx_cursor_txn(cursor), cursor);
+        mdbx_cursor_renew(dw->ew->getReadTxn(), cursor);
     if (endKeyAddress) {
         uint32_t* keyBuffer = (uint32_t*) endKeyAddress;
         endKey.iov_len = *keyBuffer;
