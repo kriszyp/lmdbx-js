@@ -1,12 +1,12 @@
 export let Env, Compression, Cursor, getAddress, getAddressShared, setGlobalBuffer,
-    require, arch, fs, lmdbError, path, EventEmitter, orderedBinary, MsgpackrEncoder, WeakLRUCache;
+    require, arch, fs, lmdbxError, path, EventEmitter, orderedBinary, MsgpackrEncoder, WeakLRUCache;
 export function setNativeFunctions(externals) {
 	Env = externals.Env;
 	Compression = externals.Compression;
 	getAddress = externals.getAddress;
     setGlobalBuffer = externals.setGlobalBuffer;
     Cursor = externals.Cursor;
-    lmdbError = externals.lmdbError;
+    lmdbxError = externals.lmdbxError;
 }
 export function setExternals(externals) {
     require = externals.require;

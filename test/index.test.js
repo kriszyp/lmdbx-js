@@ -12,19 +12,10 @@ import inspector from 'inspector'
 //inspector.open(9330, null, true); debugger
 let nativeMethods, dirName = dirname(fileURLToPath(import.meta.url))
 
-<<<<<<< HEAD
-import { open, levelup, bufferToKeyValue, keyValueToBuffer, asBinary, ABORT } from '../node-index.js';
-import { ArrayLikeIterable } from '../util/ArrayLikeIterable.js'
-import inspector from 'inspector'
-//inspector.open(9330, null, true); //debugger
-  
-describe('lmdbx-js', function() {
-=======
 import { open, levelup, bufferToKeyValue, keyValueToBuffer, asBinary, ABORT, IF_EXISTS } from '../node-index.js';
 import { RangeIterable } from '../util/RangeIterable.js'
 
-describe('lmdb-js', function() {
->>>>>>> lmdb-js/master
+describe('lmdbx-js', function() {
   let testDirPath = path.resolve(dirName, './testdata-ls');
 
   // just to make a reasonable sized chunk of data...
@@ -48,7 +39,7 @@ describe('lmdb-js', function() {
   });
   let testIteration = 0
   describe('Basic use', basicTests({ }));
-  describe('Basic use with overlapping sync', basicTests({ overlappingSync: true }));
+  describe('Basic use with overlapping sync', basicTests({ safeNoSync: true }));
   describe('Basic use with encryption', basicTests({ compression: false, encryptionKey: 'Use this key to encrypt the data' }));
   describe('Check encrypted data', basicTests({ compression: false, encryptionKey: 'Use this key to encrypt the data', checkLast: true }));
   describe('Basic use with JSON', basicTests({ encoding: 'json' }));
@@ -611,11 +602,7 @@ describe('lmdb-js', function() {
           throw new Error('duplicate key returned')
         lastKey = key
       }
-<<<<<<< HEAD
-    })
-=======
     });
->>>>>>> lmdb-js/master
     it('big keys', async function() {
       let keyBase = ''
       for (let i = 0; i < 1900; i++) {
@@ -661,7 +648,7 @@ describe('lmdb-js', function() {
       should.equal(values[3], value);
     });
 
-    it.only('invalid key', async function() {
+    it('invalid key', async function() {
       expect(() => db.get({ foo: 'bar' })).to.throw();
       expect(() => db.put({ foo: 'bar' }, 'hello')).to.throw();
       expect(() => db.put('x'.repeat(4027), 'hello')).to.throw();

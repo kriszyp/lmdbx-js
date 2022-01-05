@@ -1,5 +1,5 @@
 import { RangeIterable }  from './util/RangeIterable.js';
-import { getAddress, Cursor, setGlobalBuffer, orderedBinary, lmdbError }  from './external.js';
+import { getAddress, Cursor, setGlobalBuffer, orderedBinary, lmdbxError }  from './external.js';
 import { saveKey }  from './keys.js';
 const ITERATOR_DONE = { done: true, value: undefined };
 const Uint8ArraySlice = Uint8Array.prototype.slice;
@@ -224,7 +224,7 @@ export function addReadMethods(LMDBStore, {
 					flags |= 0x1000;
 					let count = position(options.offset);
 					if (count < 0)
-						lmdbError(count);
+						lmdbxError(count);
 					finishCursor();
 					return count;
 				}
@@ -288,14 +288,14 @@ export function addReadMethods(LMDBStore, {
 						if (keySize <= 0 ||
 								(count++ >= limit)) {
 							if (count < 0)
-								lmdbError(count);				
+								lmdbxError(count);				
 							finishCursor();
 							return ITERATOR_DONE;
 						}
 						if (!valuesForKey || snapshot === false) {
 							if (keySize > 20000) {
 								if (keySize > 0x1000000)
-									lmdbError(keySize - 0x100000000)
+									lmdbxError(keySize - 0x100000000)
 								throw new Error('Invalid key size ' + keySize.toString(16))
 							}
 							currentKey = store.readKey(keyBytes, 32, keySize + 32);
@@ -308,7 +308,7 @@ export function addReadMethods(LMDBStore, {
 								bytes = store._allocateGetBuffer(lastSize);
 								let rc = cursor.getCurrentValue();
 								if (rc < 0)
-									lmdbError(count);
+									lmdbxError(count);
 							}
 							bytes.length = lastSize;
 							if (store.decoder) {

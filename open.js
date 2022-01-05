@@ -1,4 +1,4 @@
-import { Compression, getAddress, require, arch, fs, path as pathModule, lmdbError, EventEmitter, MsgpackrEncoder, Env } from './external.js';
+import { Compression, getAddress, require, arch, fs, path as pathModule, lmdbxError, EventEmitter, MsgpackrEncoder, Env } from './external.js';
 import { CachingStore, setGetLastVersion } from './caching.js';
 import { addReadMethods, makeReusableBuffer } from './read.js';
 import { addWriteMethods } from './write.js';
@@ -79,7 +79,6 @@ export function open(path, options) {
 		}
 	}
 	let flags =
-		(options.overlappingSync ? 0x1000 : 0) |
 		(options.noSubdir ? 0x4000 : 0) |
 		(options.noSync ? 0x10000 : 0) |
 		(options.readOnly ? 0x20000 : 0) |

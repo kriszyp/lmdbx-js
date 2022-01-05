@@ -141,11 +141,8 @@ export function addWriteMethods(LMDBStore, { env, fixedBuffer, resetReadTxn, use
 			let endPosition;
 			try {
 				endPosition = store.writeKey(key, targetBytes, keyStartPosition);
-<<<<<<< HEAD
-=======
-				if (!(keyStartPosition < endPosition) && flags != 12)
-					throw new Error('Invalid key or zero length key is not allowed in LMDB')
->>>>>>> lmdb-js/master
+				if (!(keyStartPosition <= endPosition) && flags != 12)
+					throw new Error('Invalid key is not allowed in libmdbx')
 			} catch(error) {
 				targetBytes.fill(0, keyStartPosition);
 				if (error.name == 'RangeError')
