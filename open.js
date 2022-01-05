@@ -80,7 +80,8 @@ export function open(path, options) {
 	}
 	let flags =
 		(options.noSubdir ? 0x4000 : 0) |
-		(options.noSync ? 0x10000 : 0) |
+		(options.safeNoSync ? 0x10000 : 0) |
+		((options.noSync || options.utterlyNoSync) ? 0x110000 : 0) |
 		(options.readOnly ? 0x20000 : 0) |
 		(options.noMetaSync ? 0x40000 : 0) |
 		(options.useWritemap ? 0x80000 : 0) |
