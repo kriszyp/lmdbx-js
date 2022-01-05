@@ -1,6 +1,6 @@
 # lmdbx-js
 [![license](https://img.shields.io/badge/license-MIT-brightgreen)](LICENSE)
-[![npm version](https://img.shields.io/npm/v/lmdbx-js.svg?style=flat-square)](https://www.npmjs.org/package/lmdbx)
+[![npm version](https://img.shields.io/npm/v/lmdbx.svg?style=flat-square)](https://www.npmjs.org/package/lmdbx)
 [![get](https://img.shields.io/badge/get-4.5%20MOPS-yellow)](README.md)
 [![put](https://img.shields.io/badge/put-1.7%20MOPS-yellow)](README.md)
 
