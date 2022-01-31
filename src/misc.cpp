@@ -22,6 +22,7 @@ void setupExportMisc(Local<Object> exports) {
     Nan::SetMethod(exports, "lmdbxError", lmdbxError);
     //Nan::SetMethod(exports, "getBufferForAddress", getBufferForAddress);
     Nan::SetMethod(exports, "getAddress", getViewAddress);
+    Nan::SetMethod(exports, "clearKeptObjects", clearKeptObjects);
     // this is set solely for the purpose of giving a good name to the set of native functions for the profiler since V8
     // just uses the name of the last exported native function:
     Nan::SetMethod(exports, "lmdbxNativeFunctions", lmdbxNativeFunctions);
@@ -202,6 +203,12 @@ NAN_METHOD(getViewAddress) {
     void* address = length > 0 ? node::Buffer::Data(info[0]) : nullptr;
     info.GetReturnValue().Set(Nan::New<Number>((size_t) address));
 }
+NAN_METHOD(clearKeptObjects) {
+    #if NODE_VERSION_AT_LEAST(12,0,0)
+    Isolate::GetCurrent()->ClearKeptObjects();
+    #endif
+}
+
 NAN_METHOD(lmdbxNativeFunctions) {
     // no-op, just doing this to give a label to the native functions
 }

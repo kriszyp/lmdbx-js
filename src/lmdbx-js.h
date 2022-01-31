@@ -145,6 +145,7 @@ NAN_METHOD(lmdbxError);
 NAN_METHOD(getViewAddress);
 NAN_METHOD(getAddress);
 NAN_METHOD(lmdbxNativeFunctions);
+NAN_METHOD(clearKeptObjects);
 
 #ifndef thread_local
 #ifdef __GNUC__
@@ -225,8 +226,6 @@ class TxnTracked {
     TxnTracked(MDBX_txn *txn, unsigned int flags);
     ~TxnTracked();
     unsigned int flags;
-    int cursorCount;
-    bool onlyCursor;
     MDBX_txn *txn;
     TxnTracked *parent;
 };
@@ -554,11 +553,12 @@ public:
     int prefetch(uint32_t* keys);
     int open(int flags, char* name, bool hasVersions, LmdbxKeyType keyType, Compression* compression);
 #if ENABLE_FAST_API && NODE_VERSION_AT_LEAST(16,6,0)
-    static uint32_t getByBinaryFast(Local<Object> receiver_obj, uint32_t keySize, FastApiCallbackOptions& options);
+    static uint32_t getByBinaryFast(Local<Object> receiver_obj, uint32_t keySize);
 #endif
     uint32_t doGetByBinary(uint32_t keySize);
     static void getByBinary(const v8::FunctionCallbackInfo<v8::Value>& info);
     static NAN_METHOD(getStringByBinary);
+    static NAN_METHOD(getSharedByBinary);
 };
 
 class Compression : public Nan::ObjectWrap {
@@ -646,7 +646,7 @@ public:
     int returnEntry(int lastRC, MDBX_val &key, MDBX_val &data);
 #if ENABLE_FAST_API && NODE_VERSION_AT_LEAST(16,6,0)
     static uint32_t positionFast(Local<Object> receiver_obj, uint32_t flags, uint32_t offset, uint32_t keySize, uint64_t endKeyAddress, FastApiCallbackOptions& options);
-    static uint32_t iterateFast(Local<Object> receiver_obj, FastApiCallbackOptions& options);
+    static int32_t iterateFast(Local<Object> receiver_obj, FastApiCallbackOptions& options);
 #endif
     static void position(const v8::FunctionCallbackInfo<v8::Value>& info);    
     uint32_t doPosition(uint32_t offset, uint32_t keySize, uint64_t endKeyAddress);

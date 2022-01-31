@@ -11,35 +11,18 @@ import { WeakLRUCache } from 'weak-lru-cache';
 import * as orderedBinary from 'ordered-binary';
 orderedBinary.enableNullTermination();
 
-let nativeFunctions, dirName = dirname(fileURLToPath(import.meta.url)).replace(/dist$/, '');
-try {
-	nativeFunctions = require('node-gyp-build')(dirName);
-	if (process.versions.modules == 93)
-		require('v8').setFlagsFromString('--turbo-fast-api-calls');
-} catch(error) {
-	if (process.versions.modules == 93) {
-		// use this abi version as the backup version without turbo-fast-api-calls enabled
-		Object.defineProperty(process.versions, 'modules', { value: '92' });
-		try {
-			nativeFunctions = require('node-gyp-build')(dirName);
-		} catch(secondError) {
-			throw error;
-		} finally {
-			Object.defineProperty(process.versions, 'modules', { value: '93' });
-		}
-	} else
-		throw error;
-}
+let dirName = dirname(fileURLToPath(import.meta.url)).replace(/dist$/, '');
 
-setNativeFunctions(nativeFunctions);
+setNativeFunctions(require('node-gyp-build')(dirName));
 setExternals({
 	require, arch, fs, path, MsgpackrEncoder, WeakLRUCache, orderedBinary, EventEmitter
 });
-export { toBufferKey as keyValueToBuffer, compareKeys, compareKeys as compareKey, fromBufferKey as bufferToKeyValue } from 'ordered-binary/index.js';
+export { toBufferKey as keyValueToBuffer, compareKeys, compareKeys as compareKey, fromBufferKey as bufferToKeyValue } from 'ordered-binary';
 export { ABORT, IF_EXISTS, asBinary } from './write.js';
 export { levelup } from './level.js';
+export { clearKeptObjects } from './external.js';
 export { open, getLastVersion, getLastEntrySize, setLastVersion, allDbs } from './open.js';
-import { toBufferKey as keyValueToBuffer, compareKeys as compareKey, fromBufferKey as bufferToKeyValue } from 'ordered-binary/index.js';
+import { toBufferKey as keyValueToBuffer, compareKeys as compareKey, fromBufferKey as bufferToKeyValue } from 'ordered-binary';
 import { open, getLastVersion } from './open.js';
 export default {
 	open, getLastVersion, compareKey, keyValueToBuffer, bufferToKeyValue, path, EventEmitter

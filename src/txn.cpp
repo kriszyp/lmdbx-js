@@ -6,8 +6,6 @@ using namespace node;
 TxnTracked::TxnTracked(MDBX_txn *txn, unsigned int flags) {
     this->txn = txn;
     this->flags = flags;
-    cursorCount = 0;
-    onlyCursor = false;
     parent = nullptr;
 }
 
@@ -162,7 +160,6 @@ int TxnWrap::begin(EnvWrap *ew, unsigned int flags) {
         ew->currentReadTxn = txn;
         ew->readTxnRenewed = true;
     }
-    this->parentTw = parentTw;
     return 0;
 }
 extern "C" EXTERN void resetTxn(double twPointer, int flags) {

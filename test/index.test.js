@@ -14,6 +14,7 @@ let nativeMethods, dirName = dirname(fileURLToPath(import.meta.url))
 
 import { open, levelup, bufferToKeyValue, keyValueToBuffer, asBinary, ABORT, IF_EXISTS } from '../node-index.js';
 import { RangeIterable } from '../util/RangeIterable.js'
+import { assert } from 'console';
 
 describe('lmdbx-js', function() {
   let testDirPath = path.resolve(dirName, './testdata-ls');
@@ -95,7 +96,7 @@ describe('lmdbx-js', function() {
       return
     }
     it('zero length values', async function() {
-      await db; // should be able to await db even if nothing has happened
+      await db.committed // should be able to await db even if nothing has happened
       db.put(5, asBinary(Buffer.from([])));
       await db2.put('key1', asBinary(Buffer.from([])));
       should.equal(db.getBinary(5).length, 0);
@@ -163,7 +164,7 @@ describe('lmdbx-js', function() {
       ]
       for (let key of keys)
         db.put(key, 3);
-      await db;
+      await db.committed
       for (let { key, value } of db.getRange({
         start: ['Test', null],
         end: ['Test', null],
@@ -316,6 +317,16 @@ describe('lmdbx-js', function() {
         db.put('key2', dataIn);
       })
     })
+    it('conditional put', async function() {
+      if (db.encoding == 'ordered-binary')
+        return;
+      const key = 'test';
+      await db.put(key, { a: 1, b: 2 }, 1);
+      db.getEntry(key);
+      await db.put(key, { a: 2, b: 3 }, 2, 1);
+      const entry2 = db.get(key);
+      should.equal(entry2.a, 2);
+    })
     it.skip('trigger sync commit', async function() {
       let dataIn = {foo: 4, bar: false}
       db.immediateBatchThreshold = 1
@@ -332,7 +343,7 @@ describe('lmdbx-js', function() {
       let data2 = {foo: 2, bar: false}
       db.put('key1',  data1);
       db.put('key2',  data2);
-      await db;
+      await db.committed
       let count = 0
       for (let { key, value } of db.getRange({start:'key', end:'keyz', snapshot: !acrossTransactions})) {
         if (acrossTransactions)
@@ -353,7 +364,7 @@ describe('lmdbx-js', function() {
       let data2 = {foo: 2, bar: false}
       db.put('key1',  data1);
       db.put('key2',  data2);
-      await db;
+      await db.committed
       let count = 0;
       for (let { key, value } of db.getRange({start:'key', end:'keyz'})) {
         if (count > 0)
@@ -799,7 +810,7 @@ describe('lmdbx-js', function() {
       db.put('c1', 'value1');
       db.put('c2', 'value2');
       db.put('c3', 'value3');
-      await db;
+      await db.committed
       let iterator
       db.transactionSync(() => {
         if (db.cache) {
@@ -890,12 +901,21 @@ describe('lmdbx-js', function() {
       }));
       dbBinary.put('buffer', Buffer.from('hello'));
       dbBinary.put('empty', Buffer.from([]));
+      let big = new Uint8Array(0x21000);
+      big.fill(3);
+      dbBinary.put('big', big);
       let promise = dbBinary.put('Uint8Array', new Uint8Array([1,2,3]));
       await promise
       await promise.flushed
       dbBinary.get('buffer').toString().should.equal('hello');
       dbBinary.get('Uint8Array')[1].should.equal(2);
       dbBinary.get('empty').length.should.equal(0);
+
+      dbBinary.get('big')[3].should.equal(3);
+      dbBinary.get('big')[3].should.equal(3);
+      dbBinary.getBinaryFast('big')[3].should.equal(3);
+      dbBinary.getBinaryFast('big')[3].should.equal(3); // do it twice to test detach the previous one
+      dbBinary.get('Uint8Array')[1].should.equal(2);
     });
     it('read and write with binary encoding of key and value', async function() {
       let dbBinary = db.openDB({
@@ -946,9 +966,7 @@ describe('lmdbx-js', function() {
         v = db.get('key3')
         db.put('key', data);
         let promise = db.close();
-        db.put('key1', data);
-        await db.put('key2', data);
-        db.put('key3', data);
+        expect(() => db.put('key1', data)).to.throw();
         await promise;
       }
     })

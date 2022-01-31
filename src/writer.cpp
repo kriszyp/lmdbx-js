@@ -19,7 +19,7 @@ const int PUT = 15;
 const int DEL = 13;
 const int DEL_VALUE = 14;
 const int START_CONDITION_BLOCK = 4;
-const int START_CONDITION_VALUE_BLOCK = 6;
+//const int START_CONDITION_VALUE_BLOCK = 6;
 const int START_BLOCK = 1;
 const int BLOCK_END = 2;
 const int POINTER_NEXT = 3;
@@ -31,13 +31,13 @@ const int HAS_VALUE = 2;
 const int CONDITIONAL = 8;
 const int CONDITIONAL_VERSION = 0x100;
 const int SET_VERSION = 0x200;
-const int HAS_INLINE_VALUE = 0x400;
+//const int HAS_INLINE_VALUE = 0x400;
 const int COMPRESSIBLE = 0x100000;
 const int DELETE_DATABASE = 0x400;
 const int TXN_HAD_ERROR = 0x40000000;
 const int TXN_DELIMITER = 0x8000000;
 const int TXN_COMMITTED = 0x10000000;
-const int TXN_FLUSHED = 0x20000000;
+//const int TXN_FLUSHED = 0x20000000;
 const int WAITING_OPERATION = 0x2000000;
 const int IF_NO_EXISTS = MDBX_NOOVERWRITE; //0x10;
 // result codes:
@@ -185,18 +185,16 @@ next_inst:	start = instruction++;
 			if (flags & HAS_VALUE) {
 				if (flags & COMPRESSIBLE) {
 					int64_t status = -1;
-					if (*(instruction + 1) > 0x40000000) { // not compressed yet
-						status = std::atomic_exchange((std::atomic<int64_t>*)(instruction + 2), (int64_t)1);
-						if (status == 2) {
-							//fprintf(stderr, "wait on compression %p\n", instruction);
-							do {
-								pthread_cond_wait(envForTxn->writingCond, envForTxn->writingLock);
-							} while (*(instruction + 1) > 0x40000000);
-						} else if (status > 2) {
-							//fprintf(stderr, "doing the compression ourselves\n");
-							((Compression*) (size_t) *((double*)&status))->compressInstruction(nullptr, (double*) (instruction + 2));
-						} // else status is 0 and compression is done
-					}
+					status = std::atomic_exchange((std::atomic<int64_t>*)(instruction + 2), (int64_t)1);
+					if (status == 2) {
+						//fprintf(stderr, "wait on compression %p\n", instruction);
+						do {
+							pthread_cond_wait(envForTxn->writingCond, envForTxn->writingLock);
+						} while (std::atomic_load((std::atomic<int64_t>*)(instruction + 2)));
+					} else if (status > 2) {
+						//fprintf(stderr, "doing the compression ourselves\n");
+						((Compression*) (size_t) *((double*)&status))->compressInstruction(nullptr, (double*) (instruction + 2));
+					} // else status is 0 and compression is done
 					// compressed
 					value.iov_base = (void*)(size_t) * ((size_t*)instruction);
 					if ((size_t)value.iov_base > 0x1000000000000)
@@ -212,11 +210,12 @@ next_inst:	start = instruction++;
 			if (flags & CONDITIONAL_VERSION) {
 				conditionalVersion = *((double*) instruction);
 				instruction += 2;
-				rc = mdbx_get(txn, dbi, &key, &value);
+				MDBX_val conditionalValue;
+				rc = mdbx_get(txn, dbi, &key, &conditionalValue);
 				if (rc)
 					validated = false;
 				else if (conditionalVersion != ANY_VERSION) {
-					validated = validated && conditionalVersion == *((double*)value.iov_base);
+					validated = validated && conditionalVersion == *((double*)conditionalValue.iov_base);
 				}
 			}
 			if (flags & SET_VERSION) {
@@ -235,10 +234,8 @@ next_inst:	start = instruction++;
 			case NO_INSTRUCTION_YET:
 				instruction -= 2; // reset back to the previous flag as the current instruction
 				rc = 0;
-				//fprintf(stderr, "no instruction yet %p %u\n", start, conditionDepth);
 				// in windows InterlockedCompareExchange might be faster
 				if (!worker->finishedProgress || conditionDepth) {
-					//fprintf(stderr, "write thread waiting %p\n", lastStart);
 					if (std::atomic_compare_exchange_strong((std::atomic<uint32_t>*) start,
 							(uint32_t*) &flags,
 							(uint32_t)WAITING_OPERATION))
@@ -248,7 +245,6 @@ next_inst:	start = instruction++;
 					if (std::atomic_compare_exchange_strong((std::atomic<uint32_t>*) start,
 							(uint32_t*) &flags,
 							(uint32_t)TXN_DELIMITER)) {
-						//fprintf(stderr, "t");//set txn_delimiter %p\n", start);
 						worker->instructions = start;
 						return 0;
 					} else
@@ -290,7 +286,6 @@ next_inst:	start = instruction++;
 				worker->progressStatus = 2;
 				rc = 0;
 				if (flags & USER_CALLBACK_STRICT_ORDER) {
-					//fprintf(stderr, "strict order\n");
 					std::atomic_fetch_or((std::atomic<uint32_t>*) start, (uint32_t) FINISHED_OPERATION); // mark it as finished so it is processed
 					while (!worker->finishedProgress) {
 						worker->WaitForCallbacks(&txn, conditionDepth == 0, nullptr);

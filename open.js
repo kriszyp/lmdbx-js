@@ -28,6 +28,7 @@ export function open(path, options) {
 		options = path;
 		path = options.path;
 	}
+	path = path || '.'
 	let extension = pathModule.extname(path);
 	let name = pathModule.basename(path, extension);
 	let is32Bit = arch().endsWith('32');
@@ -35,7 +36,7 @@ export function open(path, options) {
 		(is32Bit && options.mapSize > 0x100000000) : // larger than fits in address space, must use dynamic maps
 		is32Bit); // without a known map size, we default to being able to handle large data correctly/well*/
 	options = Object.assign({
-		path: path || '.',
+		path,
 		noSubdir: Boolean(extension),
 		isRoot: true,
 		maxDbs: 12,
@@ -141,7 +142,8 @@ export function open(path, options) {
 			let keyType = (dbOptions.keyIsUint32 || dbOptions.keyEncoding == 'uint32') ? 2 : keyIsBuffer ? 3 : 0;
 			if (keyType == 2)
 				flags |= 0x08; // integer key
-			this.db = env.openDbi(flags, dbName, keyType, dbOptions.compression);
+			if (!((flags & 0xff) && !dbName)) // if there are any dupsort options on the main db, skip as we have to use a write txn below
+				this.db = env.openDbi(flags, dbName, keyType, dbOptions.compression);
 			this._commitReadTxn(); // current read transaction becomes invalid after opening another db
 			if (!this.db) {// not found
 				if (dbOptions.create !== false && !options.readOnly) {
@@ -199,6 +201,8 @@ export function open(path, options) {
 			stores.push(this);
 		}
 		openDB(dbName, dbOptions) {
+			if (this.dupSort && this.name == null)
+				throw new Error('Can not open named databases if the main database is dupSort')
 			if (typeof dbName == 'object' && !dbOptions) {
 				dbOptions = dbName;
 				dbName = dbOptions.name;
@@ -296,8 +300,12 @@ export function open(path, options) {
 			this.clearSync();
 		}
 		clearSync() {
-			if (this.encoder && this.encoder.structures)
-				this.encoder.structures = [];
+			if (this.encoder) {
+				if (this.encoder.clearSharedData)
+					this.encoder.clearSharedData()
+				else if (this.encoder.structures)
+					this.encoder.structures = []
+			}
 			this.transactionSync(() =>
 				this.db.drop({
 					justFreePages: true
@@ -318,14 +326,16 @@ export function open(path, options) {
 				let buffer = this.getBinary(this.sharedStructuresKey);
 				if (this.useVersions)
 					setLastVersion(lastVersion);
-				return buffer ? this.decoder.decode(buffer) : [];
+				return buffer && this.decoder.decode(buffer);
 			};
 			return {
-				saveStructures: (structures, previousLength) => {
+				saveStructures: (structures, isCompatible) => {
 					return this.transactionSyncStart(() => {
 						let existingStructuresBuffer = this.getBinary(this.sharedStructuresKey);
-						let existingStructures = existingStructuresBuffer ? this.decoder.decode(existingStructuresBuffer) : [];
-						if (existingStructures.length != previousLength)
+						let existingStructures = existingStructuresBuffer && this.decoder.decode(existingStructuresBuffer);
+						if (typeof isCompatible == 'function' ?
+								!isCompatible(existingStructures) :
+								(existingStructures && existingStructures.length != isCompatible))
 							return false; // it changed, we need to indicate that we couldn't update
 						this.put(this.sharedStructuresKey, structures);
 					});

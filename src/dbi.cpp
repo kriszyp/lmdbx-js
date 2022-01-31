@@ -62,7 +62,7 @@ NAN_METHOD(DbiWrap::ctor) {
         }
     }
     dw->Wrap(info.This());
-    info.This()->Set(Nan::GetCurrentContext(), Nan::New<String>("dbi").ToLocalChecked(), Nan::New<Number>(dw->dbi));
+    (void)info.This()->Set(Nan::GetCurrentContext(), Nan::New<String>("dbi").ToLocalChecked(), Nan::New<Number>(dw->dbi));
     return info.GetReturnValue().Set(info.This());
 }
 
@@ -231,6 +231,30 @@ void DbiWrap::getByBinary(
     }   
     rc = getVersionAndUncompress(data, dw);
     return info.GetReturnValue().Set(valToBinaryUnsafe(data, dw));
+}
+NAN_METHOD(DbiWrap::getSharedByBinary) {
+    v8::Local<v8::Object> instance =
+      v8::Local<v8::Object>::Cast(info.Holder());
+    DbiWrap* dw = Nan::ObjectWrap::Unwrap<DbiWrap>(instance);
+    char* keyBuffer = dw->ew->keyBuffer;
+    MDB_txn* txn = dw->ew->getReadTxn();
+    MDB_val key;
+    MDB_val data;
+    key.mv_size = info[0]->Uint32Value(Nan::GetCurrentContext()).FromJust();
+    key.mv_data = (void*) keyBuffer;
+    int rc = mdb_get(txn, dw->dbi, &key, &data);
+    if (rc) {
+        if (rc == MDB_NOTFOUND)
+            return info.GetReturnValue().Set(Nan::Undefined());
+        else
+            return throwLmdbError(rc);
+    }   
+    rc = getVersionAndUncompress(data, dw);
+    return info.GetReturnValue().Set(Nan::NewBuffer((char*) data.mv_data,
+                                           data.mv_size,
+                                           [](char *, void *) {
+            // Data belongs to LMDB, we shouldn't free it here
+        }, nullptr).ToLocalChecked());
 }
 
 NAN_METHOD(DbiWrap::getStringByBinary) {

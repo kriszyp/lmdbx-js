@@ -1,9 +1,10 @@
-export let Env, Compression, Cursor, getAddress, getAddressShared, setGlobalBuffer,
+export let Env, Compression, Cursor, getAddress, clearKeptObjects, setGlobalBuffer,
     require, arch, fs, lmdbxError, path, EventEmitter, orderedBinary, MsgpackrEncoder, WeakLRUCache;
 export function setNativeFunctions(externals) {
 	Env = externals.Env;
 	Compression = externals.Compression;
 	getAddress = externals.getAddress;
+    clearKeptObjects = externals.clearKeptObjects;
     setGlobalBuffer = externals.setGlobalBuffer;
     Cursor = externals.Cursor;
     lmdbxError = externals.lmdbxError;
@@ -17,14 +18,4 @@ export function setExternals(externals) {
     orderedBinary = externals.orderedBinary;
     MsgpackrEncoder = externals.MsgpackrEncoder;
     WeakLRUCache = externals.WeakLRUCache;
-}
-export function instrument(symbols) {
-    for (let key in symbols) {
-        let func = symbols[key];
-        symbols[key] = function() {
-            console.log('start', key);
-            return func.apply(this, arguments);
-        }
-    }
-    
 }

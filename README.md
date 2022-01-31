@@ -370,7 +370,7 @@ let db = open({ encoder: cbor });
 * `useVersions` - Set this to true if you will be setting version numbers on the entries in the database. Note that you can not change this flag once a database has entries in it (or they won't be read correctly).
 * `keyEncoding` - This indicates the encoding to use for the database keys, and can be `'uint32'` for unsigned 32-bit integers, `'binary'` for raw buffers/Uint8Arrays, and the default `'ordered-binary'` allows any JS primitive as a keys.
 * `keyEncoder` - Provide a custom key encoder.
-* `dupSort` - Enables duplicate entries for keys. You will usually want to retrieve the values for a key with `getValues`.
+* `dupSort` - Enables duplicate entries for keys. You will usually want to retrieve the values for a key with `getValues`. Note that you can not set this flag on the unnamed/main database and also have named databases.
 * `strictAsyncOrder` - Maintain strict ordering of execution of asynchronous transaction callbacks relative to asynchronous single operations.
 
 The following additional option properties are only available when creating the main database environment (`open`):
@@ -453,7 +453,8 @@ On MacOS, there is a default limit of 10 robust locked semaphores, which imposes
 
 `npm install --use_data_v1=true`: This will build from an older version of _libmdbx_ that uses the legacy data format version 1 (the latest _libmdbx_ uses data format version 2). For portability of the data format, this may be preferable since many libraries still use older versions of _libmdbx_. Since this is an older version of _libmdbx_, some features may not be available, including encryption and remapping.
 
-`npm install --enable_fast_api_calls=true`: This will build `lmdbx-js` with V8's new API for fast calls. `lmdbx-js` supports the new fast API for several functions, and this can provide significant performance benefits for `get`s and range retrieval. This should be used in conjunction with starting node with the `--turbo-fast-api-calls` option. This is only supported in Node v17 and higher.
+<<<<<<< HEAD
+`npm install --enable_fast_api_calls=true` (or env var `ENABLE_FAST_API_CALLS=true`): This will build `lmdbx-js` with V8's new API for fast calls. `lmdbx-js` supports the new fast API for several functions, and this can provide significant performance benefits for `get`s and range retrieval. This should be used in conjunction with starting node with the `--turbo-fast-api-calls` option. This is only supported in Node v16 and higher.
 
 ## Alternate Database
 The lmdb-js project is developed in conjunction with [lmdbx-js](https://github.com/kriszyp/lmdbx-js), which is based on [libmdbx](https://github.com/erthink/libmdbx), a fork of LMDB. Each of these have their own advantages:
