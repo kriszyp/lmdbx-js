@@ -44,7 +44,7 @@ This library provides optional compression using LZ4 that works in conjunction w
 ## Usage
 An _libmdbx_ database instance is created by using `open` export from the main module:
 ```
-import { open } from 'lmdb'; // or require
+import { open } from 'lmdbx'; // or require
 // or in deno: import { open } from 'https://deno.land/x/lmdb/mod.ts';
 let myDB = open({
 	path: 'my-db',
@@ -232,7 +232,7 @@ Here are the options that can be provided to the range methods (all are optional
 ### `db.openDB(database: string|{name:string,...})`
 _libmdbx_ supports multiple databases per environment (an environment corresponds to a single memory-mapped file). When you initialize an _libmdbx_ database with `open`, the database uses the default root database. However, you can use multiple databases per environment/file and instantiate a database for each one. If you are going to be opening many databases, make sure you set the `maxDbs` (it defaults to 12). For example, we can open multiple databases for a single environment:
 ```
-import { open } from 'lmdb';
+import { open } from 'lmdbx';
 let rootDB = open('all-my-data');
 let usersDB = myDB.openDB('users');
 let groupsDB = myDB.openDB('groups');
