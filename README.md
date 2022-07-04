@@ -19,7 +19,7 @@ This library is branched from [lmdb-js](https://github.com/DoctorEvidence/lmdb-j
 However, there are only a few reasons for remaining with the core LMDB/lmdb-js package/project:
 * On Windows, LMDB has been upgraded to use overlapping write-through writes that significantly faster than `FlushFileBuffers`, and until https://github.com/erthink/libmdbx/issues/224 is resolved, write performance is likely to be much better for Windows with LMDB.
 * lmdb-js has modifications of LMDB that allow for automated growth of the memory maps, and this requires a little more explicit handling in libmdbx.
-* There are still some unresolved issues in lmdbx-js with `doesExist` and deferred opening of databases that I am working on.
+* On non-Windows OSes, lmdb-js uses overlapping sync techniques that seem to outperform lmdbx-js.
 
 This library is published to the NPM package `lmdbx` (the 0.1.x versions were published to `lmdbx-store`), and can be installed with:
 ```npm install lmdbx```
@@ -45,7 +45,7 @@ This library provides optional compression using LZ4 that works in conjunction w
 An _libmdbx_ database instance is created by using `open` export from the main module:
 ```
 import { open } from 'lmdbx'; // or require
-// or in deno: import { open } from 'https://deno.land/x/lmdb/mod.ts';
+// or in deno: import { open } from 'https://deno.land/x/lmdbx/mod.ts';
 let myDB = open({
 	path: 'my-db',
 	// any options go here, we can turn on compression like this:
@@ -417,22 +417,22 @@ The database instance is an <a href="https://nodejs.org/dist/latest-v11.x/docs/a
 `beforecommit` - This event is fired before a transaction finishes/commits. The callback function can perform additional (asynchronous) writes (`put` and `remove`) and they will be included in the transaction about to be performed as the last operation(s) before the transaction commits (this can be useful for updating a global version stamp based on all previous writes, for example). Using this event forces `eventTurnBatching` to be enabled. This can be called multiples times in a transaction, but should always be called as the last operation of a transaction.
 
 ## Deno
-This package is supported on Deno as of v2.1, but there are some requirements and limitations. First, lmdb-js requires FFI (which is currently marked `unstable`) and several permissions to be enabled, so you need to start deno with at least these flags:
+This package is supported on Deno as of v2.1, but there are some requirements and limitations. First, lmdbx-js requires FFI (which is currently marked `unstable`) and several permissions to be enabled, so you need to start deno with at least these flags:
 ```
 deno run --allow-ffi --unstable --allow-write --allow-read --allow-env --allow-net your-app.ts
 ```
 Deno [currently doesn't provide any infrastructure for binary builds](https://github.com/denoland/deno/issues/12943), so lmdbx-js will attempt to download and save the appropriate binary file on its own. If you need to manually specify a path, you can do so with the `LMDBX_LIB_PATH` env variable.
 
-You can then use the library with an import of the lmdb-js module from deno.land (insert the version you want):
+You can then use the library with an import of the lmdbx-js module from deno.land (insert the version you want):
 ```
 import { open } from 'https://deno.land/x/lmdbx@<version>/mod.ts';
 ```
 
-Also, lmdb-js doesn't support asynchronous transaction callbacks (`transaction` API), which can't be efficiently implemented without a resolution to this [issue](https://github.com/denoland/deno/issues/12946). You can still use the standard asynchronous put and remove methods, which will properly be committed asynchronously, as well as the synchronous transactions.
+Also, lmdbx-js doesn't support asynchronous transaction callbacks (`transaction` API), which can't be efficiently implemented without a resolution to this [issue](https://github.com/denoland/deno/issues/12946). You can still use the standard asynchronous put and remove methods, which will properly be committed asynchronously, as well as the synchronous transactions.
 
 ## LevelUp
 
-If you have an existing application built on LevelUp, the lmdb-js is designed to make it easy to transition to this package, with most of the LevelUp API implemented and supported in lmdb-js. This includes the `put`, `del`, `batch`, `status`, `isOperation`, and `getMany` functions. One key difference in APIs is that LevelUp uses asynchronous callback based `get`s, but lmdb-js is so fast that it generally returns from `get` call before an an event can even be queued, consequently lmdb-js uses synchronous `get`s. However, there is a `levelup` export that can be used to generate a new database instance with LevelUp's style of API for `get` (although it still runs synchronously):
+If you have an existing application built on LevelUp, the lmdbx-js is designed to make it easy to transition to this package, with most of the LevelUp API implemented and supported in lmdbx-js. This includes the `put`, `del`, `batch`, `status`, `isOperation`, and `getMany` functions. One key difference in APIs is that LevelUp uses asynchronous callback based `get`s, but lmdbx-js is so fast that it generally returns from `get` call before an an event can even be queued, consequently lmdbx-js uses synchronous `get`s. However, there is a `levelup` export that can be used to generate a new database instance with LevelUp's style of API for `get` (although it still runs synchronously):
 ```
 let dbLevel = levelup(db)
 dbLevel.get(id, (error, value) => {
@@ -453,13 +453,12 @@ On MacOS, there is a default limit of 10 robust locked semaphores, which imposes
 
 `npm install --use_data_v1=true`: This will build from an older version of _libmdbx_ that uses the legacy data format version 1 (the latest _libmdbx_ uses data format version 2). For portability of the data format, this may be preferable since many libraries still use older versions of _libmdbx_. Since this is an older version of _libmdbx_, some features may not be available, including encryption and remapping.
 
-<<<<<<< HEAD
 `npm install --enable_fast_api_calls=true` (or env var `ENABLE_FAST_API_CALLS=true`): This will build `lmdbx-js` with V8's new API for fast calls. `lmdbx-js` supports the new fast API for several functions, and this can provide significant performance benefits for `get`s and range retrieval. This should be used in conjunction with starting node with the `--turbo-fast-api-calls` option. This is only supported in Node v16 and higher.
 
 ## Alternate Database
 The lmdb-js project is developed in conjunction with [lmdbx-js](https://github.com/kriszyp/lmdbx-js), which is based on [libmdbx](https://github.com/erthink/libmdbx), a fork of LMDB. Each of these have their own advantages:
 * lmdb-js/LMDB is great for general usage, easy to set up with automated sizing, supports encryption, and works well across all platforms.
-* lmdbx-js/libmdbx has more advanced management of free space and database sizing that can offer more performance optimizations for heavy usage. However, it may have not perform as well on Windows, and the database format is not compatible with LMDB.
+* lmdbx-js/libmdbx has more advanced management of free space and database sizing that can offer more performance optimizations for heavy usage. However, in my testing, it generally still does not perform as well as LMDB.
 
 ## Credits
 
@@ -468,10 +467,6 @@ This library is built on [_libmdbx_](https://symas.com/lmdb/) and is built from 
 ## License
 
 This library is licensed under the terms of the MIT license.
-
-Also note that _libmdbx_: Symas (the authors of _libmdbx_) [offers commercial support of _libmdbx_](https://symas.com/lightning-memory-mapped-database/).
-
-This project has no funding needs. If you feel inclined to donate, donate to one of Kris's favorite charities like [Innovations in Poverty Action](https://www.poverty-action.org/) or any of [GiveWell](https://givewell.org)'s recommended charities.
 
 ## Related Projects
 
