@@ -13,7 +13,7 @@ if (!libPath || !exists(libPath)) {
         let os: string = Deno.build.os;
         os = os == 'windows' ? 'win32' : os;
         os += '-' + ARCH[Deno.build.arch];
-        let libraryUrl = 'https://cdn.jsdelivr.net/npm/lmdbs@' + (version || 'latest') +
+        let libraryUrl = 'https://cdn.jsdelivr.net/npm/lmdb@' + (version || 'latest') +
             '/prebuilds/' + os + '/node.abi93' + (os == 'win32' ? '' : '.glibc') + '.node';
         console.log('Download', libraryUrl);
         let response = await fetch(libraryUrl);
