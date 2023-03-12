@@ -6,7 +6,7 @@ import { WeakLRUCache } from 'https://deno.land/x/weakcache@v1.1.3/index.js';
 function arch() {
     return Deno.build.arch;
 }
-import * as path from 'https://deno.land/std/node/path.ts';
-export { fileURLToPath } from 'https://deno.land/std/node/url.ts';
-import { EventEmitter } from 'https://deno.land/std/node/events.ts'
+import * as path from 'node:path';
+export { fileURLToPath } from 'node:url';
+import { EventEmitter } from 'node:events'
 setExternals({ orderedBinary, MsgpackrEncoder, WeakLRUCache, arch, path, EventEmitter, fs: Deno });
